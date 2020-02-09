@@ -1,4 +1,4 @@
-# FieteLab-Reversal-Learning
+# Fiete Lab - IBL ANN-RNNs Project
 
 
 ### Setup
