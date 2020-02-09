@@ -1,0 +1,8 @@
+seaborn
+pandas
+matplotlib
+psytrack
+gym
+numpy
+plotly
+torch
