@@ -227,7 +227,6 @@ def compute_psytrack_fit(trial_data):
     #     return
 
 
-
 def run_model_one_step(model,
                        stimuli,
                        rewards,
