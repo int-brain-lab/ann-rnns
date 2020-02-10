@@ -121,7 +121,7 @@ class ReversalLearningTask(gym.Env):
 
         self.stimuli_block_number = np.concatenate([
             np.full(shape=nt, fill_value=i) for nt, i
-            in zip(self.num_trials_per_block, np.arange(1, 1+len(self.num_trials_per_block)))])
+            in zip(self.num_trials_per_block, np.arange(len(self.num_trials_per_block)))])
         self.trial_num_within_block = np.concatenate([
             np.arange(1, 1+nt) for nt in self.num_trials_per_block])
         self.total_num_trials = np.sum(self.num_trials_per_block)
