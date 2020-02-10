@@ -51,7 +51,8 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_hidden_state_dimensionality),
         (0, utils.plot.hook_plot_hidden_state_projected_phase_space),
         (0, utils.plot.hook_plot_hidden_state_projected_vector_fields),
-        (0, utils.plot.hook_plot_psytrack_fit),
+        (0, utils.plot.hook_plot_hidden_state_projected_trajectories),
+        # (0, utils.plot.hook_plot_psytrack_fit),
     ]
 
     # every frequency must be zero
@@ -77,12 +78,13 @@ def create_hook_fns_train(start_grad_step,
         (10, hook_write_pr_curve),
         (10, utils.plot.hook_plot_avg_model_prob_by_trial_num_within_block),
         (10, utils.plot.hook_plot_psychometric_curves),
+        (10, utils.plot.hook_plot_recurrent_weight_gradients),
         (10, utils.plot.hook_plot_hidden_state_correlations),
         (10, utils.plot.hook_plot_hidden_state_dimensionality),
         (5, utils.plot.hook_plot_hidden_state_projected_phase_space),
         (5, utils.plot.hook_plot_hidden_state_projected_vector_fields),
-        (1, utils.plot.hook_plot_recurrent_weight_gradients),
-        (5, utils.plot.hook_plot_psytrack_fit),
+        (5, utils.plot.hook_plot_hidden_state_projected_trajectories),
+        # (5, utils.plot.hook_plot_psytrack_fit),
         (250, hook_save_model),
     ]
 

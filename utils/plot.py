@@ -204,7 +204,6 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
     trial_data = hook_input['run_envs_output']['trial_data']
 
     # create possible color range
-    # TODO: max block duration should be 100. why do I see 500+ trials/block?
     max_block_len = max(trial_data.groupby(['env_num', 'stimuli_block_number']).size())
     color_range = np.arange(max_block_len)
 
@@ -232,18 +231,17 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
         fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
         # separate again by block number
-        i = 0
-        for (env_num, block_number), trajectory_trial_data \
+        for (env_num, block_number), trial_data_by_block \
                 in trial_data_preferred_side.groupby(['env_num', 'stimuli_block_number']):
 
-            trajectory_indices = trajectory_trial_data.index
-            proj_hidden_states_trajectory = projected_hidden_states[trajectory_indices]
-            trajectory_color = color_range[:len(trajectory_indices)]
+            block_indices = trial_data_by_block.index.values
+            proj_hidden_states_block = projected_hidden_states[block_indices]
+            trial_colors = color_range[:len(block_indices)]
             sc = ax.scatter(
-                x=proj_hidden_states_trajectory[:, 0],
-                y=proj_hidden_states_trajectory[:, 1],
+                x=proj_hidden_states_block[:, 0],
+                y=proj_hidden_states_block[:, 1],
                 s=1,
-                c=trajectory_color)
+                c=trial_colors)
 
     color_bar = fig.colorbar(sc, cax=axes[2])
     color_bar.set_label('Trial Number within Block')
@@ -317,6 +315,61 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
 
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space_vector_field',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
+def hook_plot_hidden_state_projected_trajectories(hook_input):
+
+    # hidden states shape: (num trials, num layers, hidden dimension)
+    hidden_states = hook_input['run_envs_output']['hidden_states']
+
+    # reshape to (num trials, num layers * hidden dimension)
+    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
+    projected_hidden_states, (min_x, max_x), (min_y, max_y), pca = \
+        utils.analysis.compute_projected_hidden_states_pca(hidden_states=hidden_states)
+
+    trial_data = hook_input['run_envs_output']['trial_data']
+
+    # select only environment 0, first 4 blocks
+    subset_trial_data = trial_data[(trial_data['env_num'] == 0) &
+                                   (trial_data['stimuli_block_number'] < 8)]
+
+    # create possible color range
+    max_block_len = max(subset_trial_data.groupby(['env_num', 'stimuli_block_number']).size())
+
+    # separate by side bias
+    fig, axes = plt.subplots(2, 4,  # 1 row, 4 columns
+                             gridspec_kw={"width_ratios": [1, 1, 1, 1]},
+                             figsize=(18, 6))
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    plt.suptitle(f'Model State Space (Projected) Trajectories')
+
+    for block_num, trial_data_by_block in subset_trial_data.groupby('stimuli_block_number'):
+        ax = axes[block_num // 4, block_num % 4]  # hard coded for 2 rows, 4 columns
+        ax.set_title(f'Block Num: {1 + block_num}')
+        ax.set_xlabel('Principal Component #1')
+        ax.set_xlim(min_x, max_x)
+        ax.set_ylim(min_y, max_y)
+        if block_num // 4 == 0:
+            ax.set_ylabel('Principal Component #2')
+
+        block_indices = trial_data_by_block.index.values
+        proj_hidden_states_block = projected_hidden_states[block_indices]
+        for i in range(len(block_indices) - 1):
+            ax.plot(
+                proj_hidden_states_block[i:i+2, 0],
+                proj_hidden_states_block[i:i+2, 1],
+                color=plt.cm.jet(i/max_block_len))
+
+    # TODO: add colobar without disrupting
+    # sm = plt.cm.ScalarMappable(cmap=plt.cm.jet, norm=plt.Normalize(vmin=0, vmax=max_block_len))
+    # color_bar = fig.colorbar(sm, cax=axes[-1])
+    # color_bar.set_label('Trial Number within Block')
+    # plt.show()
+    hook_input['tensorboard_writer'].add_figure(
+        tag='hidden_state_projected_phase_space_trajectories',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)
