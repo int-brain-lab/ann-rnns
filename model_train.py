@@ -28,7 +28,7 @@ def main():
         optimizer_str='sgd')
 
     envs = create_biased_choice_worlds(
-        num_env=15,
+        num_envs=15,
         tensorboard_writer=tensorboard_writer)
 
     start_grad_step = 0

@@ -21,7 +21,7 @@ def main():
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
 
     envs = create_biased_choice_worlds(
-        num_env=10,
+        num_envs=10,
         tensorboard_writer=tensorboard_writer)
 
     model, optimizer, grad_step = load_checkpoint(

@@ -6,6 +6,9 @@ import torch
 import torch.autograd
 import torch.optim
 
+from utils.env import create_custom_worlds
+from utils.run import run_envs
+
 
 # def extract_eigenvalues_pca(matrix):
 #     """
@@ -28,9 +31,9 @@ def compute_eigenvalues_svd(matrix):
     return eigenvalues
 
 
-def compute_hidden_state_vector_field(model,
-                                      trial_data,
-                                      hidden_states):
+def compute_projected_hidden_state_vector_field(model,
+                                                trial_data,
+                                                hidden_states):
 
     # project all hidden states using pca
     # reshape to (num trials, num layers * hidden dimension)
@@ -66,7 +69,7 @@ def compute_hidden_state_vector_field(model,
 
             model_forward_output = run_model_one_step(
                 model=model,
-                stimuli=stimuli,
+                stimulus=stimuli,
                 rewards=rewards,
                 hidden_states=torch.from_numpy(sampled_hidden_states))
 
@@ -88,6 +91,41 @@ def compute_hidden_state_vector_field(model,
                 projected_sampled_next_hidden_states=projected_sampled_next_hidden_states)
 
     return vector_fields_by_side_by_stimuli
+
+
+def compute_projected_hidden_state_trajectory_controlled(model,
+                                                         pca):
+
+    envs = create_custom_worlds(
+        num_envs=1,
+        num_blocks=12,
+        left_bias_probs=(1.0, 0.0),
+        right_bias_probs=(0.0, 1.0),
+        tensorboard_writer=None)
+    avg_reward, avg_correct_choice, run_envs_output = run_envs(
+        model=model,
+        envs=envs)
+    hidden_states = run_envs_output['hidden_states']
+    projected_hidden_states = pca.fit_transform(hidden_states.reshape(hidden_states.shape[0], -1))
+
+    trajectory_controlled_output = dict(
+        trial_data=run_envs_output['trial_data'],
+        hidden_states=hidden_states,
+        projected_hidden_states=projected_hidden_states,
+    )
+
+    return trajectory_controlled_output
+
+
+def compute_projected_hidden_states_pca(hidden_states):
+    # project all hidden states to 2 dimensions
+    assert len(hidden_states.shape) == 2
+    pca = PCA(n_components=2)
+    pca.fit(hidden_states)
+    projected_hidden_states = pca.fit_transform(hidden_states)
+    min_x, max_x = min(projected_hidden_states[:, 0]), max(projected_hidden_states[:, 0])
+    min_y, max_y = min(projected_hidden_states[:, 1]), max(projected_hidden_states[:, 1])
+    return projected_hidden_states, (min_x, max_x), (min_y, max_y), pca
 
 
 def compute_model_fixed_points(model,
@@ -135,7 +173,7 @@ def compute_model_fixed_points(model,
                 optimizer.zero_grad()
                 model_forward_output = run_model_one_step(
                     model=model,
-                    stimuli=stimuli,
+                    stimulus=stimuli,
                     rewards=rewards,
                     hidden_states=fixed_point_hidden_states)
                 displacement_vector = model_forward_output['core_hidden'] - fixed_point_hidden_states
@@ -163,37 +201,30 @@ def compute_model_fixed_points(model,
     return fixed_points_by_side_by_stimuli
 
 
-def compute_projected_hidden_states_pca(hidden_states):
-    # project all hidden states to 2 dimensions
-    assert len(hidden_states.shape) == 2
-    pca = PCA(n_components=2)
-    pca.fit(hidden_states)
-    projected_hidden_states = pca.fit_transform(hidden_states)
-    min_x, max_x = min(projected_hidden_states[:, 0]), max(projected_hidden_states[:, 0])
-    min_y, max_y = min(projected_hidden_states[:, 1]), max(projected_hidden_states[:, 1])
-    return projected_hidden_states, (min_x, max_x), (min_y, max_y), pca
-
-
 def compute_psytrack_fit(trial_data):
 
-    psytrack_model_choice = trial_data['actions_chosen'].values
-    if np.mean(psytrack_model_choice) > 0.95:
+    # need to add 1 because psytrack expects 1s & 2s, not 0s & 1s
+    psytrack_model_choice = trial_data['actions_chosen'].values[1:] + 1
+    if np.var(psytrack_model_choice) < 0.025:
         print('Model made only one action')
         return
-    psytrack_stimuli = trial_data['stimuli'].values.reshape(-1, 1)
+    psytrack_stimuli = trial_data['stimuli'].values[1:].reshape(-1, 1)
+    psytrack_rewards = trial_data['rewards'].values[:-1].reshape(-1, 1)
 
     # psytrack inputs need to be shaped (N, M), where N is number of trials and
     # M is arbitrary integer
     psytrack_inputs = dict(
-        s1=psytrack_stimuli)
+        s1=psytrack_stimuli,
+        s2=psytrack_rewards)
 
     psytrack_data = dict(
         y=psytrack_model_choice,
         inputs=psytrack_inputs,
         name='Temp')
     weights_dict = dict(
-        bias=1,
-        s1=1)  # only fit first column (there is only 1 column)
+        # bias=1,
+        s1=1,
+        s2=1)  # only fit first column (there is only 1 column)
     total_num_weights = np.sum([weights_dict[i] for i in weights_dict.keys()])
     hyperparameters = dict(
         sigInit=np.power(2, 4),  # recommended
@@ -221,19 +252,14 @@ def compute_psytrack_fit(trial_data):
 
     return psytrack_fit_output
 
-    # except RuntimeError as e:
-    #     # matrix is singular b/c model outputs all same actions
-    #     # just continue
-    #     return
-
 
 def run_model_one_step(model,
-                       stimuli,
+                       stimulus,
                        rewards,
                        hidden_states=None):
 
     rewards = rewards.double()
-    stimuli = stimuli.double()
+    stimulus = stimulus.double()
 
     # set model's hidden states to given hidden states
     if hidden_states is None:
@@ -251,7 +277,7 @@ def run_model_one_step(model,
 
     # creat single step model input
     model_input = dict(
-        stimulus=stimuli,
+        stimulus=stimulus,
         reward=rewards)
 
     model_forward_output = model(model_input)

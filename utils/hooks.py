@@ -43,6 +43,8 @@ def create_hook_fns_dict(hook_fns_frequencies,
 def create_hook_fns_analyze(start_grad_step):
 
     hook_fns_frequencies = [
+        (0, utils.plot.hook_plot_hidden_state_projected_trajectories),
+        (0, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
         (0, hook_write_avg_correct_choice),
         (0, hook_write_loss),
         (0, utils.plot.hook_plot_avg_model_prob_by_trial_num_within_block),
@@ -51,8 +53,8 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_hidden_state_dimensionality),
         (0, utils.plot.hook_plot_hidden_state_projected_phase_space),
         (0, utils.plot.hook_plot_hidden_state_projected_vector_fields),
-        (0, utils.plot.hook_plot_hidden_state_projected_trajectories),
-        # (0, utils.plot.hook_plot_psytrack_fit),
+        (0, utils.plot.hook_plot_hidden_state_projected_fixed_points),
+        (0, utils.plot.hook_plot_psytrack_fit),
     ]
 
     # every frequency must be zero
@@ -84,8 +86,9 @@ def create_hook_fns_train(start_grad_step,
         (5, utils.plot.hook_plot_hidden_state_projected_phase_space),
         (5, utils.plot.hook_plot_hidden_state_projected_vector_fields),
         (5, utils.plot.hook_plot_hidden_state_projected_trajectories),
-        # (5, utils.plot.hook_plot_psytrack_fit),
-        (250, hook_save_model),
+        (5, utils.plot.hook_plot_hidden_state_projected_fixed_points),
+        (5, utils.plot.hook_plot_psytrack_fit),
+        (100, hook_save_model),
     ]
 
     train_hooks = create_hook_fns_dict(

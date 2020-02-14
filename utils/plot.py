@@ -131,7 +131,7 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
     # hidden states shape: (num trials, num layers, hidden dimension)
     hidden_states = hook_input['run_envs_output']['hidden_states']
 
-    num_grad_steps = 50
+    num_grad_steps = 10
     
     fixed_points_by_side_by_stimuli = utils.analysis.compute_model_fixed_points(
         model=hook_input['model'],
@@ -261,7 +261,7 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
     # hidden states shape: (num trials, num layers, hidden dimension)
     hidden_states = hook_input['run_envs_output']['hidden_states']
 
-    vector_fields_by_side_by_stimuli = utils.analysis.compute_hidden_state_vector_field(
+    vector_fields_by_side_by_stimuli = utils.analysis.compute_projected_hidden_state_vector_field(
         model=hook_input['model'],
         trial_data=trial_data,
         hidden_states=hidden_states)
@@ -332,47 +332,111 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
 
     trial_data = hook_input['run_envs_output']['trial_data']
 
-    # select only environment 0, first 4 blocks
+    # select only environment 0, first 8 blocks
     subset_trial_data = trial_data[(trial_data['env_num'] == 0) &
-                                   (trial_data['stimuli_block_number'] < 8)]
+                                   (trial_data['stimuli_block_number'] < 12)]
 
     # create possible color range
     max_block_len = max(subset_trial_data.groupby(['env_num', 'stimuli_block_number']).size())
 
     # separate by side bias
-    fig, axes = plt.subplots(2, 4,  # 1 row, 4 columns
+    fig, axes = plt.subplots(3, 4,  # 1 row, 4 columns
                              gridspec_kw={"width_ratios": [1, 1, 1, 1]},
-                             figsize=(18, 6))
+                             figsize=(18, 12))
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     plt.suptitle(f'Model State Space (Projected) Trajectories')
 
     for block_num, trial_data_by_block in subset_trial_data.groupby('stimuli_block_number'):
-        ax = axes[block_num // 4, block_num % 4]  # hard coded for 2 rows, 4 columns
+        row, col = block_num // 4, block_num % 4  # hard coded for 2 rows, 4 columns
+        ax = axes[row, col]
         ax.set_title(f'Block Num: {1 + block_num}')
-        ax.set_xlabel('Principal Component #1')
         ax.set_xlim(min_x, max_x)
         ax.set_ylim(min_y, max_y)
-        if block_num // 4 == 0:
+        if row == 1:
+            ax.set_xlabel('Principal Component #1')
+        if col == 0:
             ax.set_ylabel('Principal Component #2')
 
         block_indices = trial_data_by_block.index.values
         proj_hidden_states_block = projected_hidden_states[block_indices]
+        stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
+        segment_text = np.where(trial_data_by_block['actions_correct'], 'C', 'I')
         for i in range(len(block_indices) - 1):
             ax.plot(
                 proj_hidden_states_block[i:i+2, 0],
                 proj_hidden_states_block[i:i+2, 1],
                 color=plt.cm.jet(i/max_block_len))
+            ax.text(
+                proj_hidden_states_block[i, 0],
+                proj_hidden_states_block[i, 1],
+                # str(stimuli[i]),
+                segment_text[i])
 
     # TODO: add colobar without disrupting
     # sm = plt.cm.ScalarMappable(cmap=plt.cm.jet, norm=plt.Normalize(vmin=0, vmax=max_block_len))
     # color_bar = fig.colorbar(sm, cax=axes[-1])
     # color_bar.set_label('Trial Number within Block')
-    # plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space_trajectories',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)
+
+
+def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
+
+    # hidden states shape: (num trials, num layers, hidden dimension)
+    hidden_states = hook_input['run_envs_output']['hidden_states']
+
+    # reshape to (num trials, num layers * hidden dimension)
+    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
+
+    _, (min_x, max_x), (min_y, max_y), pca = \
+        utils.analysis.compute_projected_hidden_states_pca(hidden_states=hidden_states)
+
+    trajectory_controlled_output = utils.analysis.compute_projected_hidden_state_trajectory_controlled(
+        model=hook_input['model'],
+        pca=pca)
+
+    trial_data = trajectory_controlled_output['trial_data']
+    max_block_len = max(trial_data.groupby(['env_num', 'stimuli_block_number']).size())
+
+    fig, axes = plt.subplots(3, 4,  # 1 row, 3 columns
+                             gridspec_kw={"width_ratios": [1, 1, 1, 1]},
+                             figsize=(18, 12))
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    plt.suptitle(f'Model State Space (Projected) Smooth Trajectories')
+
+    for block_num, trial_data_by_block in trial_data.groupby('stimuli_block_number'):
+        row, col = block_num // 4, block_num % 4  # hard coded for 2 rows, 4 columns
+        ax = axes[row, col]
+        ax.set_title(f'Block Num: {1 + block_num}')
+        ax.set_xlim(min_x, max_x)
+        ax.set_ylim(min_y, max_y)
+        if row == 1:
+            ax.set_xlabel('Principal Component #1')
+        if col == 0:
+            ax.set_ylabel('Principal Component #2')
+
+        block_indices = trial_data_by_block.index.values
+        proj_hidden_states_block = trajectory_controlled_output['projected_hidden_states'][block_indices]
+        stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
+        for i in range(len(block_indices) - 1):
+            ax.plot(
+                proj_hidden_states_block[i:i+2, 0],
+                proj_hidden_states_block[i:i+2, 1],
+                color=plt.cm.jet(i/max_block_len))
+            ax.text(
+                proj_hidden_states_block[i+1, 0],
+                proj_hidden_states_block[i+1, 1],
+                str(stimuli[i]))
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag='hidden_state_projected_phase_space_trajectories_controlled',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
 
 
 def hook_plot_psychometric_curves(hook_input):
@@ -448,6 +512,10 @@ def hook_plot_psytrack_fit(hook_input):
 
     psytrack_fit_output = utils.analysis.compute_psytrack_fit(
         trial_data=subset_trial_data)
+
+    # if error was encountered, just skip
+    if psytrack_fit_output is None:
+        return
     wMAP, credibleInt = psytrack_fit_output['wMAP'], psytrack_fit_output['credibleInt']
 
     # makeWeightPlot(
@@ -467,7 +535,7 @@ def hook_plot_psytrack_fit(hook_input):
         sharex=True,
         gridspec_kw={'height_ratios': [1, 1, 1, 1]})
 
-    num_trials_to_display = 300
+    num_trials_to_display = 500
     trial_num = np.arange(num_trials_to_display) + 1
     fig.suptitle(f'Bernoulli GLM Model (Psytrack by Roy & Pillow) (Num Points={len(subset_trial_data)})')
     axes[3].set_xlabel('Trial Number')
@@ -486,7 +554,7 @@ def hook_plot_psytrack_fit(hook_input):
         label='Block Preferred Side')
     axes[1].scatter(
         trial_num,
-        subset_trial_data['stimuli_sides'].values[:num_trials_to_display],
+        1.05 * subset_trial_data['stimuli_sides'].values[:num_trials_to_display],
         alpha=0.8,
         s=1,
         c='tab:orange',
@@ -495,9 +563,9 @@ def hook_plot_psytrack_fit(hook_input):
     axes[1].legend(loc="upper right")
 
     # plot weight time series
-    stimuli_wMAP, bias_wMAP = wMAP[0, :num_trials_to_display], wMAP[1, :num_trials_to_display]
+    stimuli_wMAP, reward_wMAP = wMAP[0, :num_trials_to_display], wMAP[1, :num_trials_to_display]
     stimuli_interval = credibleInt[0, :num_trials_to_display]
-    bias_interval = credibleInt[1, :num_trials_to_display]
+    reward_interval = credibleInt[1, :num_trials_to_display]
     axes[2].plot(
         trial_num,
         stimuli_wMAP,
@@ -514,15 +582,15 @@ def hook_plot_psytrack_fit(hook_input):
     # add bias timeseries
     axes[3].plot(
         trial_num,
-        bias_wMAP,
-        label='Bias')
+        reward_wMAP,
+        label='Reward Weight')
     axes[3].fill_between(
         trial_num,
-        bias_wMAP - 2 * bias_interval,
-        bias_wMAP + 2 * bias_interval,
+        reward_wMAP - 2 * reward_interval,
+        reward_wMAP + 2 * reward_interval,
         alpha=0.8,
         linewidth=0)
-    axes[3].set_ylabel('BernGLM Bias')
+    axes[3].set_ylabel('BernGLM Reward Weight')
     hook_input['tensorboard_writer'].add_figure(
         tag='psytrack_model',
         figure=fig,

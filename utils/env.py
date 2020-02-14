@@ -9,8 +9,16 @@ from utils.stimuli import VectorStimulusCreator
 from utils.vec_env import VecEnv
 
 
-def create_habituation_world():
-    pass
+def create_envs(kwargs,
+                num_envs):
+
+    def make_env(kwargs):
+        def _f():
+            return ReversalLearningTask(**kwargs)
+        return _f
+
+    envs = VecEnv(make_env_fn=make_env(kwargs=kwargs), num_env=num_envs)
+    return envs
 
 
 def create_training_choice_world(batch_size):
@@ -23,17 +31,14 @@ def create_training_choice_world(batch_size):
         num_blocks=10,
         stimulus_creator=VectorStimulusCreator(),
         left_bias_probs=[0.5, 0.5],
-        right_bias_probs=[0.5, 0.5]
-    )
-
+        right_bias_probs=[0.5, 0.5])
     training_choice_worlds = [ReversalLearningTask(**kwargs)
                               for _ in range(batch_size)]
-
     return training_choice_worlds
 
 
 def create_biased_choice_worlds(tensorboard_writer,
-                                num_env=7):
+                                num_envs=7):
     """
     "biased choice world during which visual stimuli have to be actively moved
     by the mouse; left and right stimuli are presented with different probability
@@ -44,15 +49,23 @@ def create_biased_choice_worlds(tensorboard_writer,
         num_blocks=100,  # 10
         stimulus_creator=VectorStimulusCreator(),
         left_bias_probs=[0.8, 0.2],
-        right_bias_probs=[0.2, 0.8]
-    )
+        right_bias_probs=[0.2, 0.8])
+    envs = create_envs(kwargs=kwargs, num_envs=num_envs)
+    return envs
 
-    def make_env(kwargs):
-        def _f():
-            return ReversalLearningTask(**kwargs)
-        return _f
 
-    envs = VecEnv(make_env_fn=make_env(kwargs=kwargs), num_env=num_env)
+def create_custom_worlds(tensorboard_writer,
+                         num_envs=1,
+                         num_blocks=3,
+                         left_bias_probs=(0.8, 0.2),
+                         right_bias_probs=(0.2, 0.8)):
+
+    kwargs = dict(
+        num_blocks=num_blocks,  # 10
+        stimulus_creator=VectorStimulusCreator(),
+        left_bias_probs=left_bias_probs,
+        right_bias_probs=right_bias_probs)
+    envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
 
 
