@@ -131,8 +131,7 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
     # hidden states shape: (num trials, num layers, hidden dimension)
     hidden_states = hook_input['run_envs_output']['hidden_states']
 
-    num_grad_steps = 10
-    
+    num_grad_steps = 1
     fixed_points_by_side_by_stimuli = utils.analysis.compute_model_fixed_points(
         model=hook_input['model'],
         trial_data=trial_data,
@@ -145,6 +144,7 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
                              figsize=(12, 8),
                              sharex=True,
                              sharey=True)
+    fig.suptitle(f'Fixed Points (Num Grad Steps = {num_grad_steps})')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
     for c, (side, fixed_points_by_stimuli_dict) in \
@@ -166,8 +166,10 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
             else:
                 ax.set_yticks([], [])
 
-            displacement_norms = np.linalg.norm(fixed_points_dict['projected_displacement_vector'], axis=1)
-            smallest_displacement_norms_indices = displacement_norms.argsort()[:int(0.01*len(displacement_norms))]
+            # displacement_norms = np.linalg.norm(fixed_points_dict['displacement_vector'], axis=1)
+            # smallest_displacement_norms_indices = displacement_norms.argsort()[:int(len(displacement_norms))]
+            displacement_norms = fixed_points_dict['displacement_vector_norm']
+            smallest_displacement_norms_indices = displacement_norms.argsort()[:int(len(displacement_norms))]
 
             sc = ax.scatter(
                 fixed_points_dict['projected_final_sampled_hidden_states'][smallest_displacement_norms_indices, 0],
@@ -184,6 +186,7 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
     ax_colorbar = fig.add_subplot(gs[:, -1])
     color_bar = fig.colorbar(sc, cax=ax_colorbar)
     color_bar.set_label('Gradient Magnitude')
+    plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space_fixed_points',
         figure=fig,
@@ -438,7 +441,6 @@ def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
         close=True)
 
 
-
 def hook_plot_psychometric_curves(hook_input):
     # drop block number 1
     # at least until we can figure out what to do with zero-initialized hidden state
@@ -488,6 +490,7 @@ def hook_plot_recurrent_weight_gradients(hook_input):
 
     fig, ax = plt.subplots(figsize=(8, 8))
     ax = sns.heatmap(recurrent_weight_grad, cmap='RdBu_r', square=True,
+                     vmin=-0.1, vmax=0.1,
                      cbar_kws={'label': 'Gradient Value'})
     fig.suptitle('Recurrent Weight Matrix Gradients')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
@@ -506,12 +509,16 @@ def hook_plot_psytrack_fit(hook_input):
 
     trial_data = hook_input['run_envs_output']['trial_data']
 
-    # drop block 1, keep only env 1
-    keep_indices = (trial_data['env_num'] == 1) & (trial_data['stimuli_block_number'] != 1)
+    # drop block 1, keep only env 0
+    keep_indices = (trial_data['env_num'] == 0) & (trial_data['stimuli_block_number'] != 1)
     subset_trial_data = trial_data[keep_indices]
 
-    psytrack_fit_output = utils.analysis.compute_psytrack_fit(
-        trial_data=subset_trial_data)
+    try:
+        psytrack_fit_output = utils.analysis.compute_psytrack_fit(
+            trial_data=subset_trial_data)
+    except RuntimeError:
+        # Factor is exactly singular. can occur if model is outputting only one action
+        return
 
     # if error was encountered, just skip
     if psytrack_fit_output is None:
