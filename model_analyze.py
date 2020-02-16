@@ -12,7 +12,7 @@ def main():
     run_dir = 'rnn, num_layers=1, hidden_size=10, param_init=eye_2020-02-05 13:56:15.813806'
     train_log_dir = os.path.join('runs', run_dir)
 
-    # collect all checkpoints in the log directory
+    # collect last checkpoint in the log directory
     checkpoint_paths = [os.path.join(train_log_dir, file_path)
                         for file_path in os.listdir(train_log_dir)
                         if file_path.endswith('.pt')]
