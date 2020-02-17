@@ -1,4 +1,5 @@
 from datetime import datetime
+import numpy as np
 import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -28,11 +29,11 @@ def main():
         optimizer_str='sgd')
 
     envs = create_biased_choice_worlds(
-        num_envs=15,
+        num_envs=1,
         tensorboard_writer=tensorboard_writer)
 
     start_grad_step = 0
-    num_grad_steps = 751
+    num_grad_steps = 1001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
@@ -103,6 +104,7 @@ def train_model(model,
 
 if __name__ == '__main__':
     torch.manual_seed(1)
+    np.random.seed(seed=1)
     log_dir = 'runs'
     os.makedirs(log_dir, exist_ok=True)
     main()
