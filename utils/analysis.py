@@ -31,12 +31,72 @@ def compute_eigenvalues_svd(matrix):
     return eigenvalues
 
 
-def compute_jacobian_hidden_to_hidden(model):
-    pass
+def compute_jacobians_by_side_by_stimuli(model,
+                                         trial_data,
+                                         fixed_points_by_side_by_stimuli):
 
+    num_layers = model.model_kwargs['core_kwargs']['num_layers']
+    hidden_size = model.model_kwargs['core_kwargs']['hidden_size']
+    input_size = model.input_size
+    num_basis_vectors = num_layers * hidden_size
 
-def compute_jacobian_input_to_output(model):
-    pass
+    unit_basis_vectors = torch.eye(n=num_basis_vectors).reshape(num_basis_vectors, num_layers, hidden_size)
+
+    # we need to repeat each unit basis vector, once for each hidden dimension
+    # unit_basis_vectors = torch.cat([unit_basis_vectors for _ in range(num_basis_vectors)])
+
+    # consider only the "most" fixed point per stimulus/side
+    num_fixed_points_to_consider = 1
+
+    jacobians_by_side_by_stimuli = {}
+    for side, fixed_points_by_stimuli_dict in fixed_points_by_side_by_stimuli.items():
+        jacobians_by_side_by_stimuli[side] = {}
+        for stimulus, fixed_points_dict in fixed_points_by_stimuli_dict.items():
+            jacobians_by_side_by_stimuli[side][stimulus] = {}
+            rewards = torch.from_numpy(
+                trial_data.iloc[:num_fixed_points_to_consider]['rewards'].to_numpy()).reshape(-1, 1)
+            rewards = rewards.repeat(unit_basis_vectors.shape[0], 1).requires_grad_(True)
+
+            stimuli = torch.zeros(
+                size=(num_fixed_points_to_consider * unit_basis_vectors.shape[0], 1, 1)).fill_(stimulus)
+            stimuli = stimuli.requires_grad_(True)
+
+            hidden_states = fixed_points_dict['final_sampled_hidden_states'][:num_fixed_points_to_consider]
+            hidden_states = hidden_states.repeat(unit_basis_vectors.shape[0], 1, 1)
+
+            assert rewards.shape[0] == stimuli.shape[0] == hidden_states.shape[0]
+
+            model_forward_output = run_model_one_step(
+                model=model,
+                stimulus=stimuli,
+                rewards=rewards,
+                hidden_states=hidden_states)
+
+            for str_inputs in ['hidden', 'stimuli', 'rewards']:
+
+                if str_inputs == 'hidden':
+                    inputs = hidden_states
+                    reshape_size = (num_basis_vectors, num_layers * hidden_size)
+                elif str_inputs == 'stimuli':
+                    inputs = stimuli
+                    reshape_size = (num_basis_vectors, 1)
+                elif str_inputs == 'rewards':
+                    inputs = rewards
+                    reshape_size = (num_basis_vectors, 1)
+
+                # jacobian will have shape (num basis vectors, num hidden layers, hidden size)
+                jacobian = torch.autograd.grad(
+                    outputs=model_forward_output['core_output'],
+                    inputs=inputs,
+                    grad_outputs=unit_basis_vectors,
+                    retain_graph=True,  # need to retain for next jacobian
+                    only_inputs=True)[0]
+                jacobian = jacobian.reshape(*reshape_size).numpy()
+
+                jacobians_by_side_by_stimuli[side][stimulus][
+                    f'{str_inputs}_to_hidden'] = jacobian
+
+    return jacobians_by_side_by_stimuli
 
 
 def compute_projected_hidden_state_vector_field(model,
@@ -110,11 +170,11 @@ def compute_projected_hidden_state_trajectory_controlled(model,
         left_bias_probs=(1.0, 0.0),
         right_bias_probs=(0.0, 1.0),
         tensorboard_writer=None)
-    avg_reward, avg_correct_choice, run_envs_output = run_envs(
+    run_envs_output = run_envs(
         model=model,
         envs=envs)
     hidden_states = run_envs_output['hidden_states']
-    projected_hidden_states = pca.fit_transform(hidden_states.reshape(hidden_states.shape[0], -1))
+    projected_hidden_states = pca.transform(hidden_states.reshape(hidden_states.shape[0], -1))
 
     trajectory_controlled_output = dict(
         trial_data=run_envs_output['trial_data'],
@@ -130,13 +190,15 @@ def compute_projected_hidden_states_pca(hidden_states):
     assert len(hidden_states.shape) == 2
     pca = PCA(n_components=2)
     pca.fit(hidden_states)
-    projected_hidden_states = pca.fit_transform(hidden_states)
+    projected_hidden_states = pca.transform(hidden_states)
     min_x, max_x = min(projected_hidden_states[:, 0]), max(projected_hidden_states[:, 0])
     min_y, max_y = min(projected_hidden_states[:, 1]), max(projected_hidden_states[:, 1])
     return projected_hidden_states, (min_x, max_x), (min_y, max_y), pca
 
 
 def compute_model_fixed_points(model,
+                               pca,
+                               pca_hidden_states,
                                trial_data,
                                hidden_states,
                                num_grad_steps=100):
@@ -145,8 +207,6 @@ def compute_model_fixed_points(model,
 
     # project all hidden states using pca
     # reshape to (num trials, num layers * hidden dimension)
-    projected_hidden_states, xrange, yrange, pca = compute_projected_hidden_states_pca(
-        hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
 
     # identify non-first block indices
     possible_stimuli = np.linspace(-1.5, 1.5, 3)
@@ -155,20 +215,15 @@ def compute_model_fixed_points(model,
         fixed_points_by_side_by_stimuli[side] = dict()
 
         for possible_stimulus in possible_stimuli:
-            non_first_block_indices = trial_data_preferred_side.index[
-                trial_data_preferred_side['stimuli_block_number'] != 0].to_numpy()
 
-            # sample subset of indices
-            # currently sampling all indices
-            random_subset_indices = np.random.choice(
-                non_first_block_indices,
-                replace=False,
-                size=len(non_first_block_indices))
+            non_first_block_indices = trial_data_preferred_side.index.to_numpy()
+
+            random_subset_indices = non_first_block_indices
 
             initial_sampled_hidden_states = torch.from_numpy(
                 hidden_states[random_subset_indices])
-            projected_initial_sampled_hidden_states = projected_hidden_states[random_subset_indices]
-            fixed_point_hidden_states = initial_sampled_hidden_states.clone().requires_grad_(True)
+            pca_initial_sampled_hidden_states = pca_hidden_states[random_subset_indices]
+            final_sampled_hidden_states = initial_sampled_hidden_states.clone().requires_grad_(True)
 
             rewards = torch.from_numpy(
                 trial_data.iloc[random_subset_indices]['rewards'].to_numpy()).reshape(-1, 1)
@@ -176,7 +231,7 @@ def compute_model_fixed_points(model,
             stimuli = torch.zeros(
                 size=(len(random_subset_indices), 1, 1)).fill_(possible_stimulus)
 
-            optimizer = torch.optim.SGD([fixed_point_hidden_states], lr=0.001, momentum=0.1)
+            optimizer = torch.optim.SGD([final_sampled_hidden_states], lr=0.01)
             print(f'Finding fixed points using {num_grad_steps} gradient steps')
             for _ in range(num_grad_steps):
                 optimizer.zero_grad()
@@ -184,43 +239,34 @@ def compute_model_fixed_points(model,
                     model=model,
                     stimulus=stimuli,
                     rewards=rewards,
-                    hidden_states=fixed_point_hidden_states)
-                displacement_vector = model_forward_output['core_hidden'] - fixed_point_hidden_states
+                    hidden_states=final_sampled_hidden_states)
+                displacement_vector = model_forward_output['core_hidden'] - final_sampled_hidden_states
                 displacement_vector_norm = torch.norm(displacement_vector, dim=(1, 2))
-                print(f'Norm of smallest displacement vector: {torch.min(displacement_vector_norm)}')
-                # normalized_velocity = displacement_vector / torch.norm(sampled_hidden_states, dim=2).squeeze(1)
+                normalized_displacement_vector_norm = torch.div(
+                    displacement_vector_norm,
+                    torch.norm(model_forward_output['core_hidden'], dim=(1, 2)))
+                # print(f'Norm of smallest displacement vector: {torch.min(normalized_displacement_vector_norm)}')
                 loss = torch.mean(displacement_vector_norm)
+                # print(f'Fixed point finder loss: {loss.item()}')
                 loss.backward()
                 optimizer.step()
 
-            projected_final_sampled_hidden_states = pca.fit_transform(
-                fixed_point_hidden_states.reshape(len(random_subset_indices), -1).detach().numpy())
-            projected_displacement_vector = pca.fit_transform(
+            pca_final_sampled_hidden_states = pca.transform(
+                final_sampled_hidden_states.reshape(len(random_subset_indices), -1).detach().numpy())
+            pca_displacement_vector = pca.transform(
                 displacement_vector.reshape(len(random_subset_indices), -1).detach().numpy())
 
-            # fixed_points_by_side_by_stimuli[side][possible_stimulus] = dict(
-            #     xrange=xrange,
-            #     yrange=yrange,
-            #     displacement_vector=displacement_vector.detach().numpy(),
-            #     displacement_vector_norm=displacement_vector_norm.detach().numpy(),
-            #     projected_displacement_vector=projected_displacement_vector,
-            #     random_subset_indices=random_subset_indices,
-            #     initial_sampled_hidden_states=initial_sampled_hidden_states,
-            #     projected_initial_sampled_hidden_states=projected_initial_sampled_hidden_states,
-            #     final_sampled_hidden_states=fixed_point_hidden_states,
-            #     projected_final_sampled_hidden_states=projected_final_sampled_hidden_states)
-
             fixed_points_by_side_by_stimuli[side][possible_stimulus] = dict(
-                xrange=xrange,
-                yrange=yrange,
                 displacement_vector=displacement_vector.detach().numpy(),
-                displacement_vector_norm=np.zeros(len(displacement_vector)),
-                projected_displacement_vector=projected_displacement_vector,
+                displacement_vector_norm=displacement_vector_norm.detach().numpy(),
+                normalized_displacement_vector_norm=normalized_displacement_vector_norm,
+                pca_displacement_vector=pca_displacement_vector,
                 random_subset_indices=random_subset_indices,
                 initial_sampled_hidden_states=initial_sampled_hidden_states,
-                projected_initial_sampled_hidden_states=projected_initial_sampled_hidden_states,
-                final_sampled_hidden_states=initial_sampled_hidden_states,
-                projected_final_sampled_hidden_states=projected_initial_sampled_hidden_states)
+                pca_initial_sampled_hidden_states=pca_initial_sampled_hidden_states,
+                final_sampled_hidden_states=final_sampled_hidden_states,
+                pca_final_sampled_hidden_states=pca_final_sampled_hidden_states,
+                num_grad_steps=num_grad_steps)
 
     return fixed_points_by_side_by_stimuli
 
@@ -282,6 +328,16 @@ def run_model_one_step(model,
                        rewards,
                        hidden_states=None):
 
+    """
+
+    :param model:
+    :param stimulus: shape ()
+    :param rewards:
+    :param hidden_states:
+    :param input_requires_grad:
+    :return:
+    """
+
     rewards = rewards.double()
     stimulus = stimulus.double()
 
@@ -299,7 +355,7 @@ def run_model_one_step(model,
             model.core_hidden = (hidden_states[:, :, :, 0].permute(1, 0, 2),
                                  hidden_states[:, :, :, 1].permute(1, 0, 2),)
 
-    # creat single step model input
+    # create single step model input
     model_input = dict(
         stimulus=stimulus,
         reward=rewards)

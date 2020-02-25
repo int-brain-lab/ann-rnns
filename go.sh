@@ -6,4 +6,4 @@
 #SBATCH --mail-type=FAIL
 
 export PYTHONPATH=.
-python -u model_train.py        # -u flushes output buffer immediately
+python -u train.py        # -u flushes output buffer immediately

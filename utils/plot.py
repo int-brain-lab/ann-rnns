@@ -9,6 +9,10 @@ import torch
 
 import utils.analysis
 
+
+# increase resolution
+plt.rcParams["figure.dpi"] = 100.
+
 # map for converting left and right to numeric -1, 1 and vice versa
 side_string_map = {
     'left': -1,
@@ -60,18 +64,13 @@ def hook_plot_avg_model_prob_by_trial_num_within_block(hook_input):
 
 
 def hook_plot_hidden_state_dimensionality(hook_input):
-    # drop block number 1
-    # at least until we can figure out what to do with zero-initialized hidden state
-    trial_data = hook_input['run_envs_output']['trial_data']
-    non_first_block_indices = trial_data['stimuli_block_number'] != 1
 
-    # hidden states shape: (num trials, num layers, hidden dimension)
-    hidden_states = hook_input['run_envs_output']['hidden_states'][non_first_block_indices]
+    hidden_states = hook_input['run_envs_output']['hidden_states']
     hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
     eigenvalues = utils.analysis.compute_eigenvalues_svd(matrix=hidden_states)
     frac_variance_explained = np.cumsum(eigenvalues / np.sum(eigenvalues))
+    eigenvalue_index = np.arange(1, 1 + len(frac_variance_explained))
 
-    eigenvalue_index = np.arange(1, 1 + len(eigenvalues))
     plt.plot(eigenvalue_index,
              frac_variance_explained,
              'bo',
@@ -124,19 +123,10 @@ def hook_plot_hidden_state_correlations(hook_input):
 
 def hook_plot_hidden_state_projected_fixed_points(hook_input):
 
+    displacement_norm_cutoff = 0.5
+
     # TODO: deduplicate with hook_plot_hidden_state_projected_vector_fields
-
-    trial_data = hook_input['run_envs_output']['trial_data']
-
-    # hidden states shape: (num trials, num layers, hidden dimension)
-    hidden_states = hook_input['run_envs_output']['hidden_states']
-
-    num_grad_steps = 1
-    fixed_points_by_side_by_stimuli = utils.analysis.compute_model_fixed_points(
-        model=hook_input['model'],
-        trial_data=trial_data,
-        hidden_states=hidden_states,
-        num_grad_steps=num_grad_steps)
+    fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
 
     num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
     fig, axes = plt.subplots(num_stimuli, 3,  # rows, cols
@@ -144,7 +134,7 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
                              figsize=(12, 8),
                              sharex=True,
                              sharey=True)
-    fig.suptitle(f'Fixed Points (Num Grad Steps = {num_grad_steps})')
+
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
     for c, (side, fixed_points_by_stimuli_dict) in \
@@ -152,9 +142,11 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
 
         for r, (stimulus, fixed_points_dict) in enumerate(fixed_points_by_stimuli_dict.items()):
 
+            num_grad_steps = fixed_points_dict['num_grad_steps']
+
             ax = axes[r, c]
-            ax.set_xlim(fixed_points_dict['xrange'][0], fixed_points_dict['xrange'][1])
-            ax.set_ylim(fixed_points_dict['yrange'][0], fixed_points_dict['yrange'][1])
+            ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+            ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
             if r == 0:
                 ax.set_title(f'Block Side: {side_string_map[side]}')
             elif r == num_stimuli - 1:
@@ -162,22 +154,44 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
 
             if c == 0:
                 ax.set_ylabel(f'Stimulus: {stimulus}')
-                # ax.set_ylabel('Principal Component #2')
             else:
                 ax.set_yticks([], [])
 
-            # displacement_norms = np.linalg.norm(fixed_points_dict['displacement_vector'], axis=1)
-            # smallest_displacement_norms_indices = displacement_norms.argsort()[:int(len(displacement_norms))]
-            displacement_norms = fixed_points_dict['displacement_vector_norm']
-            smallest_displacement_norms_indices = displacement_norms.argsort()[:int(len(displacement_norms))]
+            displacement_norms = fixed_points_dict['normalized_displacement_vector_norm']
+            smallest_displacement_norm_indices = displacement_norms.argsort()
+            smallest_displacement_norm_indices = smallest_displacement_norm_indices[
+                displacement_norms[smallest_displacement_norm_indices] < displacement_norm_cutoff]
 
-            sc = ax.scatter(
-                fixed_points_dict['projected_final_sampled_hidden_states'][smallest_displacement_norms_indices, 0],
-                fixed_points_dict['projected_final_sampled_hidden_states'][smallest_displacement_norms_indices, 1],
-                c=displacement_norms[smallest_displacement_norms_indices],
-                vmin=0,
-                vmax=2,
-                cmap='coolwarm')
+            try:
+
+                x = fixed_points_dict['pca_final_sampled_hidden_states'][smallest_displacement_norm_indices, 0]
+                y = fixed_points_dict['pca_final_sampled_hidden_states'][smallest_displacement_norm_indices, 1]
+                colors = fixed_points_dict['normalized_displacement_vector_norm'][smallest_displacement_norm_indices]
+
+                sc = ax.scatter(
+                    x,
+                    y,
+                    c=colors,
+                    vmin=0,
+                    vmax=displacement_norm_cutoff,
+                    s=1,
+                    cmap='gist_rainbow')
+
+                # emphasize the fixed point with smallest gradient
+                sc = ax.scatter(
+                    [x[0]],
+                    [y[0]],
+                    c=[colors[0]],
+                    edgecolors='k',
+                    vmin=0,
+                    vmax=displacement_norm_cutoff,
+                    cmap='gist_rainbow'
+                )
+
+            except IndexError:
+                print('No fixed points below displacement norm cutoff')
+
+    fig.suptitle(f'Fixed Points (Num Grad Steps = {num_grad_steps})')
 
     # merge the rightmost column for the colorbar
     gs = axes[0, 2].get_gridspec()
@@ -185,8 +199,8 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
         ax.remove()
     ax_colorbar = fig.add_subplot(gs[:, -1])
     color_bar = fig.colorbar(sc, cax=ax_colorbar)
-    color_bar.set_label('Gradient Magnitude')
-    plt.show()
+    color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
+    # plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space_fixed_points',
         figure=fig,
@@ -195,14 +209,6 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
 
 
 def hook_plot_hidden_state_projected_phase_space(hook_input):
-
-    # hidden states shape: (num trials, num layers, hidden dimension)
-    hidden_states = hook_input['run_envs_output']['hidden_states']
-
-    # reshape to (num trials, num layers * hidden dimension)
-    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
-    projected_hidden_states, (min_x, max_x), (min_y, max_y), pca = \
-        utils.analysis.compute_projected_hidden_states_pca(hidden_states=hidden_states)
 
     trial_data = hook_input['run_envs_output']['trial_data']
 
@@ -229,8 +235,8 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
             raise ValueError('Unknown side!')
 
         ax.set_xlabel('Principal Component #1')
-        ax.set_xlim(min_x, max_x)
-        ax.set_ylim(min_y, max_y)
+        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
         fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
         # separate again by block number
@@ -238,7 +244,7 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
                 in trial_data_preferred_side.groupby(['env_num', 'stimuli_block_number']):
 
             block_indices = trial_data_by_block.index.values
-            proj_hidden_states_block = projected_hidden_states[block_indices]
+            proj_hidden_states_block = hook_input['pca_hidden_states'][block_indices]
             trial_colors = color_range[:len(block_indices)]
             sc = ax.scatter(
                 x=proj_hidden_states_block[:, 0],
@@ -306,7 +312,7 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
                 0.01 * vector_field_dict['displacement_vector'][:, 1] / vector_magnitude,
                 vector_magnitude,
                 scale=.1,
-                cmap='coolwarm')
+                cmap='gist_rainbow')
 
     # merge the rightmost column for the colorbar
     gs = axes[0, 2].get_gridspec()
@@ -325,14 +331,6 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
 
 def hook_plot_hidden_state_projected_trajectories(hook_input):
 
-    # hidden states shape: (num trials, num layers, hidden dimension)
-    hidden_states = hook_input['run_envs_output']['hidden_states']
-
-    # reshape to (num trials, num layers * hidden dimension)
-    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
-    projected_hidden_states, (min_x, max_x), (min_y, max_y), pca = \
-        utils.analysis.compute_projected_hidden_states_pca(hidden_states=hidden_states)
-
     trial_data = hook_input['run_envs_output']['trial_data']
 
     # select only environment 0, first 8 blocks
@@ -343,6 +341,7 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
     max_block_len = max(subset_trial_data.groupby(['env_num', 'stimuli_block_number']).size())
 
     # separate by side bias
+    num_rows, num_cols = 3, 4
     fig, axes = plt.subplots(3, 4,  # 1 row, 4 columns
                              gridspec_kw={"width_ratios": [1, 1, 1, 1]},
                              figsize=(18, 12))
@@ -350,19 +349,19 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
     plt.suptitle(f'Model State Space (Projected) Trajectories')
 
     for block_num, trial_data_by_block in subset_trial_data.groupby('stimuli_block_number'):
-        row, col = block_num // 4, block_num % 4  # hard coded for 2 rows, 4 columns
+        row, col = block_num // num_cols, block_num % num_cols
         ax = axes[row, col]
         ax.set_title(f'Block Num: {1 + block_num}')
-        ax.set_xlim(min_x, max_x)
-        ax.set_ylim(min_y, max_y)
-        if row == 1:
+        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+        if row == num_rows - 1:
             ax.set_xlabel('Principal Component #1')
         if col == 0:
             ax.set_ylabel('Principal Component #2')
 
         block_indices = trial_data_by_block.index.values
-        proj_hidden_states_block = projected_hidden_states[block_indices]
-        stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
+        proj_hidden_states_block = hook_input['pca_hidden_states'][block_indices]
+        # stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
         segment_text = np.where(trial_data_by_block['actions_correct'], 'C', 'I')
         for i in range(len(block_indices) - 1):
             ax.plot(
@@ -388,18 +387,9 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
 
 def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
 
-    # hidden states shape: (num trials, num layers, hidden dimension)
-    hidden_states = hook_input['run_envs_output']['hidden_states']
-
-    # reshape to (num trials, num layers * hidden dimension)
-    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
-
-    _, (min_x, max_x), (min_y, max_y), pca = \
-        utils.analysis.compute_projected_hidden_states_pca(hidden_states=hidden_states)
-
     trajectory_controlled_output = utils.analysis.compute_projected_hidden_state_trajectory_controlled(
         model=hook_input['model'],
-        pca=pca)
+        pca=hook_input['pca'])
 
     trial_data = trajectory_controlled_output['trial_data']
     max_block_len = max(trial_data.groupby(['env_num', 'stimuli_block_number']).size())
@@ -414,8 +404,8 @@ def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
         row, col = block_num // 4, block_num % 4  # hard coded for 2 rows, 4 columns
         ax = axes[row, col]
         ax.set_title(f'Block Num: {1 + block_num}')
-        ax.set_xlim(min_x, max_x)
-        ax.set_ylim(min_y, max_y)
+        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
         if row == 1:
             ax.set_xlabel('Principal Component #1')
         if col == 0:
@@ -436,6 +426,143 @@ def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
 
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space_trajectories_controlled',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
+def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
+
+    fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
+
+    # plot each fixed point in phase space
+
+    jacobians_by_side_by_stimuli = utils.analysis.compute_jacobians_by_side_by_stimuli(
+        model=hook_input['model'],
+        trial_data=hook_input['run_envs_output']['trial_data'],
+        fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli)
+
+    num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
+    fig, axes = plt.subplots(num_stimuli, 2,  # rows, cols
+                             gridspec_kw={"width_ratios": [1, 1]},
+                             figsize=(12, 8),
+                             sharex=True,
+                             sharey=True)
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    jacobian_colors = dict(
+        hidden_to_hidden='tab:blue',
+        stimuli_to_hidden='tab:orange',
+        rewards_to_hidden='tab:green')
+
+    for c, (side, jacobians_by_stimuli) in \
+        enumerate(jacobians_by_side_by_stimuli.items()):
+
+        for r, (stimulus, jacobians) in enumerate(jacobians_by_stimuli.items()):
+
+            ax = axes[r, c]
+            if r == 0:
+                ax.set_title(f'Block Side: {side_string_map[side]}')
+            elif r == num_stimuli - 1:
+                ax.set_xlabel(r'$\Re(\lambda)$')
+
+            if c == 0:
+                ax.set_ylabel(r'$\Im(\lambda)$')
+
+            for jacobian_name, jacobian in jacobians.items():
+
+                if jacobian_name != 'hidden_to_hidden':
+                    continue
+
+                jacobian_eigvals = np.linalg.eigvals(jacobian)
+                print(max(jacobian_eigvals))
+
+                ax.set_xlim(-1.2, 1.2)
+                ax.set_ylim(-1.2, 1.2)
+
+                sc = ax.scatter(
+                    jacobian_eigvals.real,
+                    jacobian_eigvals.imag,
+                    c=jacobian_colors[jacobian_name],
+                    s=2,
+                    label=jacobian_name)
+
+            ax.legend()
+
+            # add circle
+            circle = plt.Circle((0, 0), radius=1, color='k', fill=False)
+            ax.add_patch(circle)
+
+    fig.suptitle(f'Hidden to Hidden Jacobians\' Eigenvalues')
+    # plt.show()
+    hook_input['tensorboard_writer'].add_figure(
+        tag='hidden_to_hidden_jacobian_eigenvalues_complex_plane',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
+def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
+
+
+    fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
+
+    # plot each fixed point in phase space
+
+    jacobians_by_side_by_stimuli = utils.analysis.compute_jacobians_by_side_by_stimuli(
+        model=hook_input['model'],
+        trial_data=hook_input['run_envs_output']['trial_data'],
+        fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli)
+
+    num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
+    fig, axes = plt.subplots(num_stimuli, 2,  # rows, cols
+                             gridspec_kw={"width_ratios": [1, 1]},
+                             figsize=(12, 8),
+                             sharex=True,
+                             sharey=True)
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    jacobian_colors = dict(
+        hidden_to_hidden='tab:blue',
+        stimuli_to_hidden='tab:orange',
+        rewards_to_hidden='tab:green')
+
+    for c, (side, jacobians_by_stimuli) in \
+        enumerate(jacobians_by_side_by_stimuli.items()):
+
+        for r, (stimulus, jacobians) in enumerate(jacobians_by_stimuli.items()):
+
+            ax = axes[r, c]
+            if r == 0:
+                ax.set_title(f'Block Side: {side_string_map[side]}')
+            elif r == num_stimuli - 1:
+                ax.set_xlabel('Eigenvalue Index')
+
+            if c == 0:
+                ax.set_ylabel(r'Time Constant ($\tau$)')
+
+            for jacobian_name, jacobian in jacobians.items():
+
+                if jacobian_name != 'hidden_to_hidden':
+                    continue
+
+                jacobian_eigvals = np.linalg.eigvals(jacobian)
+                time_constants = np.sort(np.abs(1. / np.log(np.abs(jacobian_eigvals))))[::-1]
+                eigvals_indices = np.arange(1, 1+len(jacobian_eigvals))
+
+                sc = ax.scatter(
+                    eigvals_indices,
+                    time_constants,
+                    c=jacobian_colors[jacobian_name],
+                    # s=2,
+                    label=jacobian_name)
+
+            ax.legend()
+
+    fig.suptitle('Hidden to Hidden Jacobians\' Time Constants')
+    # TODO understand why this produces such inconsistent plots
+    hook_input['tensorboard_writer'].add_figure(
+        tag='hidden_to_hidden_jacobian_time_constants',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)

@@ -1,7 +1,9 @@
+import numpy as np
 import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
+from utils.analysis import compute_model_fixed_points, compute_projected_hidden_states_pca
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_analyze
 from utils.run import load_checkpoint, run_envs
@@ -9,7 +11,8 @@ from utils.run import load_checkpoint, run_envs
 
 def main():
 
-    run_dir = 'rnn, num_layers=1, hidden_size=10, param_init=eye_2020-02-05 13:56:15.813806'
+    run_dir = 'rnn, num_layers=1, hidden_size=100, param_init=default_2020-02-24 09:32:50.187688'
+    # run_dir = 'rnn, num_layers=1, hidden_size=10, param_init=eye_2020-02-05 13:56:15.813806'
     train_log_dir = os.path.join('runs', run_dir)
 
     # collect last checkpoint in the log directory
@@ -21,7 +24,7 @@ def main():
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
 
     envs = create_biased_choice_worlds(
-        num_envs=10,
+        num_envs=11,
         tensorboard_writer=tensorboard_writer)
 
     model, optimizer, grad_step = load_checkpoint(
@@ -69,6 +72,18 @@ def analyze_model(model,
         run_envs_output=run_envs_output
     )
 
+    pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
+        hidden_states=run_envs_output['hidden_states'].reshape(
+            run_envs_output['hidden_states'].shape[0], -1))
+
+    fixed_points_by_side_by_stimuli = compute_model_fixed_points(
+        model=model,
+        pca=pca,
+        pca_hidden_states=pca_hidden_states,
+        trial_data=run_envs_output['trial_data'],
+        hidden_states=run_envs_output['hidden_states'],
+        num_grad_steps=50)
+
     hook_input = dict(
         loss=loss.item(),
         avg_correct_choice=avg_correct_choice.item(),
@@ -77,6 +92,11 @@ def analyze_model(model,
         model=model,
         envs=envs,
         optimizer=optimizer,
+        pca_hidden_states=pca_hidden_states,
+        pca_xrange=pca_xrange,
+        pca_yrange=pca_yrange,
+        pca=pca,
+        fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
         tensorboard_writer=tensorboard_writer,
         tag_prefix=tag_prefix)
 
@@ -87,5 +107,6 @@ def analyze_model(model,
 
 
 if __name__ == '__main__':
-    torch.manual_seed(1)
+    torch.manual_seed(2)
+    np.random.seed(2)
     main()

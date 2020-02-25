@@ -4,12 +4,16 @@ import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
+from utils.analysis import compute_model_fixed_points, compute_projected_hidden_states_pca
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_train
 from utils.run import create_model, create_optimizer, run_envs
 
 
 def main():
+    seed = 1
+    torch.manual_seed(seed)
+    np.random.seed(seed=seed)
 
     model = create_model(
         model_str='rnn',
@@ -29,7 +33,7 @@ def main():
         optimizer_str='sgd')
 
     envs = create_biased_choice_worlds(
-        num_envs=1,
+        num_envs=2,
         tensorboard_writer=tensorboard_writer)
 
     start_grad_step = 0
@@ -71,23 +75,40 @@ def train_model(model,
         optimizer.zero_grad()
         if hasattr(model, 'reset_core_hidden'):
             model.reset_core_hidden()
-        avg_reward, avg_correct_choice, run_envs_output = run_envs(
+        run_envs_output = run_envs(
             model=model,
             envs=envs)
-        loss = -avg_reward
-        loss.backward()
+        run_envs_output['avg_loss'].backward()
         optimizer.step()
 
         if grad_step in hook_fns:
 
+            pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
+                hidden_states=run_envs_output['hidden_states'].reshape(
+                    run_envs_output['hidden_states'].shape[0], -1))
+
+            fixed_points_by_side_by_stimuli = compute_model_fixed_points(
+                model=model,
+                pca=pca,
+                pca_hidden_states=pca_hidden_states,
+                trial_data=run_envs_output['trial_data'],
+                hidden_states=run_envs_output['hidden_states'],
+                num_grad_steps=50)
+
             hook_input = dict(
-                loss=loss.item(),
-                avg_correct_choice=avg_correct_choice.item(),
+                avg_loss=run_envs_output['avg_loss'].item(),
+                avg_reward=run_envs_output['avg_reward'].item(),
+                avg_correct_choice=run_envs_output['avg_correct_choice'].item(),
                 run_envs_output=run_envs_output,
                 grad_step=grad_step,
                 model=model,
                 envs=envs,
                 optimizer=optimizer,
+                pca_hidden_states=pca_hidden_states,
+                pca_xrange=pca_xrange,
+                pca_yrange=pca_yrange,
+                pca=pca,
+                fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
                 tensorboard_writer=tensorboard_writer,
                 tag_prefix=tag_prefix)
 
@@ -103,8 +124,6 @@ def train_model(model,
 
 
 if __name__ == '__main__':
-    torch.manual_seed(1)
-    np.random.seed(seed=1)
     log_dir = 'runs'
     os.makedirs(log_dir, exist_ok=True)
     main()

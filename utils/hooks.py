@@ -43,30 +43,32 @@ def create_hook_fns_dict(hook_fns_frequencies,
 def create_hook_fns_analyze(start_grad_step):
 
     hook_fns_frequencies = [
-        (0, utils.plot.hook_plot_hidden_state_projected_trajectories),
-        (0, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
         (0, hook_write_avg_correct_choice),
-        (0, hook_write_loss),
+        (0, hook_write_scalars),
         (0, utils.plot.hook_plot_avg_model_prob_by_trial_num_within_block),
         (0, utils.plot.hook_plot_psychometric_curves),
         (0, utils.plot.hook_plot_hidden_state_correlations),
         (0, utils.plot.hook_plot_hidden_state_dimensionality),
         (0, utils.plot.hook_plot_hidden_state_projected_phase_space),
         (0, utils.plot.hook_plot_hidden_state_projected_vector_fields),
+        (0, utils.plot.hook_plot_hidden_state_projected_trajectories),
+        (0, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
         (0, utils.plot.hook_plot_hidden_state_projected_fixed_points),
         (0, utils.plot.hook_plot_psytrack_fit),
+        (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
+        # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_time_constants),
     ]
 
     # every frequency must be zero
     for hook_fns_frequency, _ in hook_fns_frequencies:
         assert hook_fns_frequency == 0
 
-    test_hooks = create_hook_fns_dict(
+    analyze_hooks = create_hook_fns_dict(
         hook_fns_frequencies=hook_fns_frequencies,
         start_grad_step=start_grad_step,
         num_grad_steps=0)
 
-    return test_hooks
+    return analyze_hooks
 
 
 def create_hook_fns_train(start_grad_step,
@@ -74,21 +76,22 @@ def create_hook_fns_train(start_grad_step,
 
     hook_fns_frequencies = [
         (0, hook_log_args),
-        (1, hook_print_model_progress),
-        (5, hook_write_avg_correct_choice),
-        (5, hook_write_loss),
-        (10, hook_write_pr_curve),
+        (5, hook_print_model_progress),
+        (5, hook_write_scalars),
+        # (10, hook_write_pr_curve),
         (10, utils.plot.hook_plot_avg_model_prob_by_trial_num_within_block),
         (10, utils.plot.hook_plot_psychometric_curves),
         (10, utils.plot.hook_plot_recurrent_weight_gradients),
         (10, utils.plot.hook_plot_hidden_state_correlations),
         (10, utils.plot.hook_plot_hidden_state_dimensionality),
-        (5, utils.plot.hook_plot_hidden_state_projected_phase_space),
-        (5, utils.plot.hook_plot_hidden_state_projected_vector_fields),
-        (5, utils.plot.hook_plot_hidden_state_projected_trajectories),
-        (5, utils.plot.hook_plot_hidden_state_projected_fixed_points),
-        (5, utils.plot.hook_plot_psytrack_fit),
-        (100, hook_save_model),
+        (10, utils.plot.hook_plot_hidden_state_projected_phase_space),
+        (10, utils.plot.hook_plot_hidden_state_projected_vector_fields),
+        (10, utils.plot.hook_plot_hidden_state_projected_trajectories),
+        (10, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
+        (10, utils.plot.hook_plot_hidden_state_projected_fixed_points),
+        (10, utils.plot.hook_plot_psytrack_fit),
+        (10, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
+        (1000, hook_save_model),
     ]
 
     train_hooks = create_hook_fns_dict(
@@ -120,9 +123,10 @@ def hook_log_args(hook_input):
 
 
 def hook_print_model_progress(hook_input):
-    print('Grad Step: {:5d}\tLoss: {:6.3f}\tFrac Correct Choice: {:6.3f}'.format(
+    print('Grad Step: {:5d}\tLoss: {:6.3f}\tReward: {:6.3f}\tFrac Correct Choice: {:6.3f}'.format(
         hook_input['grad_step'],
-        hook_input['loss'],
+        hook_input['avg_loss'],
+        hook_input['avg_reward'],
         hook_input['avg_correct_choice']))
 
 
@@ -151,20 +155,22 @@ def hook_save_model(hook_input):
     print('Saved model!')
 
 
-def hook_write_avg_correct_choice(hook_input):
-
-    hook_input['tensorboard_writer'].add_scalar(
-        tag=hook_input['tag_prefix'] + 'avg_correct_choice_per_grad_step',
-        scalar_value=hook_input['avg_correct_choice'],
-        global_step=hook_input['grad_step'])
-
-
-def hook_write_loss(hook_input):
+def hook_write_scalars(hook_input):
 
     # record scalars
     hook_input['tensorboard_writer'].add_scalar(
         tag=hook_input['tag_prefix'] + 'loss_per_grad_step',
-        scalar_value=hook_input['loss'],
+        scalar_value=hook_input['avg_loss'],
+        global_step=hook_input['grad_step'])
+
+    hook_input['tensorboard_writer'].add_scalar(
+        tag=hook_input['tag_prefix'] + 'reward_per_grad_step',
+        scalar_value=hook_input['avg_reward'],
+        global_step=hook_input['grad_step'])
+
+    hook_input['tensorboard_writer'].add_scalar(
+        tag=hook_input['tag_prefix'] + 'avg_correct_choice_per_grad_step',
+        scalar_value=hook_input['avg_correct_choice'],
         global_step=hook_input['grad_step'])
 
 

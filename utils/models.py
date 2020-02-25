@@ -142,16 +142,20 @@ class RecurrentModel(nn.Module):
 
         param_init_str = model_kwargs['param_init']
         if param_init_str == 'default':
-            pass
+            return core
         elif param_init_str == 'eye':
             param_init_fn = init.eye_
         elif param_init_str == 'zeros':
             param_init_fn = init.zeros_
         elif param_init_str == 'ones':
+            # TODO: breaks with error
+            # ValueError: Input contains NaN, infinity or a value too large for dtype('float64').
             param_init_fn = init.ones_
         elif param_init_str == 'uniform':
             param_init_fn = init.uniform
         elif param_init_str == 'normal':
+            # TODO: breaks with error
+            # ValueError: Input contains NaN, infinity or a value too large for dtype('float64').
             param_init_fn = init.normal_
         elif param_init_str == 'xavier_uniform':
             param_init_fn = init.xavier_uniform_

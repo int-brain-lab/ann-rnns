@@ -78,6 +78,7 @@ def run_envs(model,
              envs):
 
     total_reward = torch.zeros(1, dtype=torch.double, requires_grad=True)
+    total_loss = torch.zeros(1, dtype=torch.double, requires_grad=True)
     if hasattr(model, 'reset_core_hidden'):
         model.reset_core_hidden()  # reset core's hidden state
     step_output = envs.reset()
@@ -86,6 +87,7 @@ def run_envs(model,
     total_trials = 0
     while not np.any(step_output['done']):
         total_reward = total_reward + torch.sum(step_output['reward'])  # cannot use +=
+        total_loss = total_loss + torch.sum(step_output['loss'])
 
         model_output = model(step_output)
 
@@ -98,6 +100,7 @@ def run_envs(model,
 
     # divide by total trials, batch size
     avg_reward = total_reward / (total_trials * len(envs))
+    avg_loss = total_loss / (total_trials * len(envs))
 
     # construct output dictionary
     # most of the environments will be truncated early because we stop as soon
@@ -124,6 +127,8 @@ def run_envs(model,
         [env.stimuli_preferred_sides.detach().numpy() for env in envs])[used_trial_indices]
     rewards = np.concatenate(
         [env.rewards.detach().numpy() for env in envs])[used_trial_indices]
+    losses = np.concatenate(
+        [env.losses.detach().numpy() for env in envs])[used_trial_indices]
     stimuli_block_number = np.concatenate(
         [env.stimuli_block_number for env in envs])[used_trial_indices]
     trial_num_within_block = np.concatenate(
@@ -152,6 +157,7 @@ def run_envs(model,
         stimuli_preferred_sides=stimuli_preferred_sides,
         stimuli_block_number=stimuli_block_number,
         rewards=rewards,
+        losses=losses,
         actions_chosen=actions_chosen,
         actions_correct=actions_correct,
         model_left_action_probs=actions_probs[:, 0],
@@ -162,10 +168,13 @@ def run_envs(model,
 
     run_envs_output = dict(
         trial_data=trial_data,
-        hidden_states=model_hidden_states
+        hidden_states=model_hidden_states,
+        avg_reward=avg_reward,
+        avg_correct_choice=avg_correct_choice,
+        avg_loss=avg_loss,
     )
 
-    return avg_reward, avg_correct_choice, run_envs_output
+    return run_envs_output
 
 
 def save_train_output(test_or_train_output):

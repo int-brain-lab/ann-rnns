@@ -73,6 +73,7 @@ class ReversalLearningTask(gym.Env):
 
     def __init__(self,
                  stimulus_creator,
+                 loss_fn_str='nll',
                  num_blocks=10,
                  block_duration_param=1/60,
                  left_bias_probs=None,
@@ -84,7 +85,8 @@ class ReversalLearningTask(gym.Env):
         self.action_space = spaces.Discrete(2)  # left or right
         self.observation_space = stimulus_creator.observation_space
         self.reward_range = (0, 1)
-        self.loss_fn = NLLLoss()
+        self.loss_fn = self.create_loss_fn(loss_fn_str=loss_fn_str)
+        self.reward_fn = self.create_reward_fn()
 
         # store the probability of a stimulus appearing on a particular side
         # within a biased block
@@ -104,13 +106,45 @@ class ReversalLearningTask(gym.Env):
         self.stimuli_sides = None
         self.stimuli_strengths = None
         self.stimuli_preferred_sides = None
-        self.rewards = None
+        self.losses = None  # loss is used by optimizer
+        self.rewards = None  # reward is input to model at next time step
         self.actions = None
         self.model_hidden_states = None
         self.current_trial_idx = None
         self.total_num_trials = None
 
         # TODO: perhaps distinguish between creating new values vs resetting index to repeat previous values
+
+    @staticmethod
+    def create_loss_fn(loss_fn_str):
+        """
+
+        :param loss_fn_str:
+        :return: loss_fn:   must have two keyword arguments, target and input
+                            target.shape should be (batch size = 1,)
+                            input.shape should be (batch size = 1, num actions = 2,)
+        """
+
+        if loss_fn_str == 'nll':
+            loss_fn = NLLLoss()
+        elif loss_fn_str == '':
+            loss_fn = 10
+        return loss_fn
+
+    @staticmethod
+    def create_reward_fn():
+        """
+
+        :param reward_fn_str:
+        :return: reward_fn:   must have two keyword arguments, target and input
+                    target.shape should be (batch size = 1,)
+                    input.shape should be (batch size = 1, num actions = 2,)
+        """
+        def reward_fn(target, input):
+            reward = target == torch.max(input, dim=1)[1]  # max returns (value, index)
+            return reward.double()
+
+        return reward_fn
 
     def close(self):
         pass
@@ -159,6 +193,7 @@ class ReversalLearningTask(gym.Env):
         self.stimuli_sides = torch.from_numpy(np.concatenate(blocks_stimuli_sides))
         self.stimuli_preferred_sides = torch.from_numpy(np.concatenate(blocks_preferred_sides))
         self.stimuli_strengths = torch.from_numpy(np.concatenate(blocks_stimuli_strengths))
+        self.losses = torch.zeros((self.total_num_trials,))
         self.rewards = torch.zeros((self.total_num_trials,))
         self.actions = torch.zeros((self.total_num_trials, 2))
         self.model_hidden_states = []
@@ -167,8 +202,8 @@ class ReversalLearningTask(gym.Env):
         # create first observation
         step_output = dict(
             stimulus=self.stimuli[self.current_trial_idx].reshape((1, -1)),
-            # reward=torch.Tensor([0.]),
             reward=torch.zeros(1).double().requires_grad_(True),
+            loss=torch.zeros(1).double().requires_grad_(True),
             info=None,
             done=True if self.current_trial_idx == self.total_num_trials else False)
 
@@ -178,17 +213,23 @@ class ReversalLearningTask(gym.Env):
              model_softmax_output,
              model_hidden):
 
-        # model_softmax_output has shape (batch=1, length=1, 2)
-        # reshape action to (batch=1, 2) since loss fn has no notion of sequence
-        reward = -self.loss_fn(
-            target=(self.stimuli_sides[self.current_trial_idx].reshape((1,)) + 1) / 2,
-            input=model_softmax_output.reshape((1, -1)))
+        model_action_probs = model_softmax_output.reshape((1, -1))
 
-        # store record of reward
+        # model_softmax_output has shape (batch=1, length=1, 2)
+        # target has shape (batch=1,)
+        # reshape action to (batch=1, 2) since loss fn has no notion of sequence
+        loss = self.loss_fn(
+            target=(self.stimuli_sides[self.current_trial_idx].reshape((1,)) + 1) / 2,
+            input=model_action_probs)
+        self.losses[self.current_trial_idx] = loss
+
+        reward = self.reward_fn(
+            target=(self.stimuli_sides[self.current_trial_idx].reshape((1,)) + 1) / 2,
+            input=model_action_probs)
         self.rewards[self.current_trial_idx] = reward
 
         # store record of action
-        self.actions[self.current_trial_idx] = model_softmax_output.reshape((1, -1))
+        self.actions[self.current_trial_idx] = model_action_probs
 
         # store record of model's hidden state
         self.model_hidden_states.append(model_hidden.detach().numpy())
@@ -204,7 +245,10 @@ class ReversalLearningTask(gym.Env):
         info = dict(stimulus_side=stimulus_side,
                     stimulus_strength=stimulus_strength)
 
+        # loss is used by the optimizer
+        # reward is (possibly different) input to the model at the next time step
         step_output = dict(
+            loss=loss,
             stimulus=stimulus.reshape((1, -1)),
             reward=reward,
             info=info,
