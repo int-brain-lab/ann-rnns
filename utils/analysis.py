@@ -259,7 +259,7 @@ def compute_model_fixed_points(model,
             fixed_points_by_side_by_stimuli[side][possible_stimulus] = dict(
                 displacement_vector=displacement_vector.detach().numpy(),
                 displacement_vector_norm=displacement_vector_norm.detach().numpy(),
-                normalized_displacement_vector_norm=normalized_displacement_vector_norm,
+                normalized_displacement_vector_norm=normalized_displacement_vector_norm.detach().numpy(),
                 pca_displacement_vector=pca_displacement_vector,
                 random_subset_indices=random_subset_indices,
                 initial_sampled_hidden_states=initial_sampled_hidden_states,

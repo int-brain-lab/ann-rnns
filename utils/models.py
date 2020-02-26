@@ -1,4 +1,6 @@
 from collections import OrderedDict
+import numpy as np
+import scipy.linalg
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -103,6 +105,9 @@ class RecurrentModel(nn.Module):
         self.core = self._create_core(
             model_str=model_str,
             model_kwargs=model_kwargs)
+        self.connectivity_mask = self._create_connectivity_mask(
+            model_str=model_str,
+            model_kwargs=model_kwargs)
         self.model_str = model_str
         self.model_kwargs = model_kwargs
 
@@ -176,6 +181,36 @@ class RecurrentModel(nn.Module):
 
         return core
 
+    def _create_connectivity_mask(self, model_str, model_kwargs):
+
+        hidden_size = model_kwargs['core_kwargs']['hidden_size']
+
+        if model_kwargs['connectivity_mask'] == 'none':
+            connectivity_mask = np.ones((hidden_size, hidden_size))
+        elif model_kwargs['connectivity_mask'] == 'diagonal':
+            connectivity_mask = np.eye(hidden_size)
+        elif model_kwargs['connectivity_mask'] == 'two_block_diag':
+            # check divisibility by exactly two
+            assert 2 * (hidden_size // 2) == hidden_size
+            connectivity_mask = scipy.linalg.block_diag(
+                np.ones((hidden_size // 2, hidden_size // 2)),
+                np.ones((hidden_size // 2, hidden_size // 2)))
+        elif model_kwargs['connectivity_mask'] == 'circulant':
+            first_column = np.zeros(hidden_size)
+            # set 30% overlap
+            first_column[:int(0.3*hidden_size)] = 1.
+            connectivity_mask = scipy.linalg.circulant(c=first_column)
+        elif model_kwargs['connectivity_mask'] == 'toeplitz':
+            first_column = np.zeros(hidden_size)
+            # set 30% overlap
+            first_column[:int(0.3*hidden_size)] = 1.
+            connectivity_mask = scipy.linalg.toeplitz(c=first_column)
+        else:
+            raise ValueError('Unrecognized connectivity mask: ', model_kwargs['connectivity_mask'])
+
+        connectivity_mask = torch.from_numpy(connectivity_mask).double()
+        return connectivity_mask
+
     def forward(self, model_input):
         """
         Performs a forward pass through model.
@@ -229,6 +264,12 @@ class RecurrentModel(nn.Module):
 
     def reset_core_hidden(self):
         self.core_hidden = None
+
+    def apply_connectivity_mask(self):
+        if self.model_str == 'rnn':
+            self.core.weight_hh_l0.data[:] = torch.mul(self.core.weight_hh_l0, self.connectivity_mask)
+        else:
+            raise NotImplementedError('Implement masking for non-RNN model')
 
 
 def create_description_str(model):

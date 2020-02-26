@@ -18,7 +18,8 @@ def main():
     model = create_model(
         model_str='rnn',
         model_kwargs=dict(core_kwargs=dict(num_layers=1, hidden_size=10),
-                          param_init='eye'))
+                          param_init='default',
+                          connectivity_mask='toeplitz'))
 
     # model = create_model(
     #     model_str='ff',
@@ -72,9 +73,11 @@ def train_model(model,
     grad_step = start_grad_step
 
     for grad_step in range(start_grad_step, start_grad_step + num_grad_steps):
-        optimizer.zero_grad()
+        if hasattr(model, 'apply_connectivity_mask'):
+            model.apply_connectivity_mask()
         if hasattr(model, 'reset_core_hidden'):
             model.reset_core_hidden()
+        optimizer.zero_grad()
         run_envs_output = run_envs(
             model=model,
             envs=envs)

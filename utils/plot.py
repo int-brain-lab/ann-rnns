@@ -121,6 +121,30 @@ def hook_plot_hidden_state_correlations(hook_input):
         close=True)
 
 
+def hook_plot_hidden_state_recurrent_weights(hook_input):
+
+    if hook_input['model'].model_str == 'rnn':
+        hidden_state_weights = hook_input['model'].core.weight_hh_l0.data
+    else:
+        raise NotImplementedError
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax = sns.heatmap(hidden_state_weights, cmap='RdBu_r', square=True,
+                     # vmin=-10., vmax=10.,
+                     cbar_kws={'label': 'weight'})
+    fig.suptitle('Hidden Units Recurrent Weights')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    ax.invert_yaxis()
+    ax.set_xlabel('Hidden Unit Number')
+    ax.set_ylabel('Hidden Unit Number')
+    ax.set_aspect("equal")  # ensures little squares don't become rectangles
+    hook_input['tensorboard_writer'].add_figure(
+        tag='hidden_state_recurrent_weights',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
 def hook_plot_hidden_state_projected_fixed_points(hook_input):
 
     displacement_norm_cutoff = 0.5
@@ -320,7 +344,7 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
         ax.remove()
     ax_colorbar = fig.add_subplot(gs[:, -1])
     color_bar = fig.colorbar(qvr, cax=ax_colorbar)
-    color_bar.set_label('Gradient Magnitude')
+    color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
 
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space_vector_field',
