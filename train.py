@@ -25,11 +25,11 @@ def main():
         optimizer_str='sgd')
 
     envs = create_biased_choice_worlds(
-        num_envs=2,
+        num_envs=11,
         tensorboard_writer=tensorboard_writer)
 
     start_grad_step = 0
-    num_grad_steps = 1001
+    num_grad_steps = 10001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
