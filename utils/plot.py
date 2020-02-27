@@ -4,11 +4,10 @@ import matplotlib.cm as cm
 import numpy as np
 import pandas as pd
 from psytrack.plot.analysisFunctions import makeWeightPlot
+import scipy.cluster.hierarchy as spc
 import seaborn as sns
-import torch
 
 import utils.analysis
-
 
 # increase resolution
 plt.rcParams["figure.dpi"] = 100.
@@ -64,7 +63,6 @@ def hook_plot_avg_model_prob_by_trial_num_within_block(hook_input):
 
 
 def hook_plot_hidden_state_dimensionality(hook_input):
-
     hidden_states = hook_input['run_envs_output']['hidden_states']
     hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
     eigenvalues = utils.analysis.compute_eigenvalues_svd(matrix=hidden_states)
@@ -104,16 +102,54 @@ def hook_plot_hidden_state_correlations(hook_input):
     hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
     hidden_state_correlations = np.corrcoef(hidden_states.T)
 
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax = sns.heatmap(hidden_state_correlations, cmap='RdBu_r',
-                     vmin=-1., vmax=1., square=True,
-                     cbar_kws={'label': 'correlation'})
-    fig.suptitle('Hidden Units Correlations')
+    # due to machine error, correlation matrix isn't exactly symmetric (typically has e-16 errors)
+    # lets make it symmetric
+    hidden_state_correlations = (hidden_state_correlations + hidden_state_correlations.T) / 2
+
+    # compute pairwise distances
+    pdist = spc.distance.pdist(hidden_state_correlations)
+    linkage = spc.linkage(pdist, method='complete')
+    labels = spc.fcluster(linkage, 0.5 * np.max(pdist), 'distance')
+    indices = np.argsort(labels)
+
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=2,
+        figsize=(16, 8))
+    recurrent_mask_str = hook_input['model'].model_kwargs['connectivity_kwargs']['recurrent_mask']
+    fig.suptitle(f'Hidden State Correlations & Weights (Recurrent Mask: {recurrent_mask_str})')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    ax.invert_yaxis()
-    ax.set_xlabel('Hidden Unit Number')
-    ax.set_ylabel('Hidden Unit Number')
-    ax.set_aspect("equal")  # ensures little squares don't become rectangles
+
+    # plot hidden state correlations
+    sns.heatmap(hidden_state_correlations[indices][:, indices],
+                cmap='RdBu_r',
+                ax=axes[0],
+                vmin=-1.,
+                vmax=1.,
+                square=True,
+                xticklabels=indices,
+                yticklabels=indices,
+                cbar_kws={'label': 'Correlation', 'shrink': 0.5})
+    axes[0].set_title('Hidden Unit Correlations')
+    axes[0].set_xlabel('Hidden Unit Number')
+    axes[0].set_ylabel('Hidden Unit Number')
+    axes[0].set_aspect("equal")  # ensures little squares don't become rectangles
+
+    # plot recurrent matrix values
+    sns.heatmap(hook_input['model'].core.weight_hh_l0.data.numpy()[indices][:, indices],
+                cmap='RdBu_r',
+                ax=axes[1],
+                # vmin=-1.,
+                # vmax=1.,
+                square=True,
+                xticklabels=indices,
+                yticklabels=indices,
+                cbar_kws={'label': 'Weight Strength', 'shrink': 0.5})
+    axes[1].set_title('Recurrent Weight Strength')
+    axes[1].set_xlabel('Hidden Unit Number')
+    axes[1].set_ylabel('Hidden Unit Number')
+    axes[1].set_aspect("equal")  # ensures little squares don't become rectangles
+
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_correlations',
         figure=fig,
@@ -122,14 +158,14 @@ def hook_plot_hidden_state_correlations(hook_input):
 
 
 def hook_plot_hidden_state_projected_fixed_points(hook_input):
-
     displacement_norm_cutoff = 0.5
 
     # TODO: deduplicate with hook_plot_hidden_state_projected_vector_fields
     fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
 
     num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
-    fig, axes = plt.subplots(num_stimuli, 3,  # rows, cols
+    fig, axes = plt.subplots(nrows=num_stimuli,
+                             ncols=3,
                              gridspec_kw={"width_ratios": [1, 1, 0.05]},
                              figsize=(12, 8),
                              sharex=True,
@@ -138,7 +174,7 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
     for c, (side, fixed_points_by_stimuli_dict) in \
-        enumerate(fixed_points_by_side_by_stimuli.items()):
+            enumerate(fixed_points_by_side_by_stimuli.items()):
 
         for r, (stimulus, fixed_points_dict) in enumerate(fixed_points_by_stimuli_dict.items()):
 
@@ -200,7 +236,6 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
     ax_colorbar = fig.add_subplot(gs[:, -1])
     color_bar = fig.colorbar(sc, cax=ax_colorbar)
     color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
-    # plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space_fixed_points',
         figure=fig,
@@ -209,7 +244,6 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
 
 
 def hook_plot_hidden_state_projected_phase_space(hook_input):
-
     trial_data = hook_input['run_envs_output']['trial_data']
 
     # create possible color range
@@ -217,7 +251,8 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
     color_range = np.arange(max_block_len)
 
     # separate by side bias
-    fig, axes = plt.subplots(1, 3,  # 1 row, 3 columns
+    fig, axes = plt.subplots(nrows=1,
+                             ncols=3,
                              gridspec_kw={"width_ratios": [1, 1, 0.05]},
                              figsize=(12, 8))
     plt.suptitle(f'Model State Space (Projected)')
@@ -242,7 +277,6 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
         # separate again by block number
         for (env_num, block_number), trial_data_by_block \
                 in trial_data_preferred_side.groupby(['env_num', 'stimuli_block_number']):
-
             block_indices = trial_data_by_block.index.values
             proj_hidden_states_block = hook_input['pca_hidden_states'][block_indices]
             trial_colors = color_range[:len(block_indices)]
@@ -262,7 +296,6 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
 
 
 def hook_plot_hidden_state_projected_vector_fields(hook_input):
-
     # TODO: deduplicate with hook_plot_hidden_state_projected_fixed_points
 
     trial_data = hook_input['run_envs_output']['trial_data']
@@ -277,7 +310,8 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
 
     num_stimuli = len(vector_fields_by_side_by_stimuli[1.0].keys())
 
-    fig, axes = plt.subplots(num_stimuli, 3,  # rows, cols
+    fig, axes = plt.subplots(nrows=num_stimuli,
+                             ncols=3,
                              gridspec_kw={"width_ratios": [1, 1, 0.05]},
                              figsize=(12, 8),
                              sharex=True,
@@ -285,7 +319,7 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
     for c, (side, vector_fields_by_stimuli_dict) in \
-        enumerate(vector_fields_by_side_by_stimuli.items()):
+            enumerate(vector_fields_by_side_by_stimuli.items()):
 
         for r, (stimulus, vector_field_dict) in enumerate(vector_fields_by_stimuli_dict.items()):
 
@@ -330,7 +364,6 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
 
 
 def hook_plot_hidden_state_projected_trajectories(hook_input):
-
     trial_data = hook_input['run_envs_output']['trial_data']
 
     # select only environment 0, first 8 blocks
@@ -342,7 +375,8 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
 
     # separate by side bias
     num_rows, num_cols = 3, 4
-    fig, axes = plt.subplots(3, 4,  # 1 row, 4 columns
+    fig, axes = plt.subplots(nrows=3,
+                             ncols=4,
                              gridspec_kw={"width_ratios": [1, 1, 1, 1]},
                              figsize=(18, 12))
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
@@ -365,9 +399,9 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
         segment_text = np.where(trial_data_by_block['actions_correct'], 'C', 'I')
         for i in range(len(block_indices) - 1):
             ax.plot(
-                proj_hidden_states_block[i:i+2, 0],
-                proj_hidden_states_block[i:i+2, 1],
-                color=plt.cm.jet(i/max_block_len))
+                proj_hidden_states_block[i:i + 2, 0],
+                proj_hidden_states_block[i:i + 2, 1],
+                color=plt.cm.jet(i / max_block_len))
             ax.text(
                 proj_hidden_states_block[i, 0],
                 proj_hidden_states_block[i, 1],
@@ -386,7 +420,6 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
 
 
 def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
-
     trajectory_controlled_output = utils.analysis.compute_projected_hidden_state_trajectory_controlled(
         model=hook_input['model'],
         pca=hook_input['pca'])
@@ -394,7 +427,8 @@ def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
     trial_data = trajectory_controlled_output['trial_data']
     max_block_len = max(trial_data.groupby(['env_num', 'stimuli_block_number']).size())
 
-    fig, axes = plt.subplots(3, 4,  # 1 row, 3 columns
+    fig, axes = plt.subplots(nrows=3,
+                             ncols=4,  # 1 row, 3 columns
                              gridspec_kw={"width_ratios": [1, 1, 1, 1]},
                              figsize=(18, 12))
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
@@ -416,12 +450,12 @@ def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
         stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
         for i in range(len(block_indices) - 1):
             ax.plot(
-                proj_hidden_states_block[i:i+2, 0],
-                proj_hidden_states_block[i:i+2, 1],
-                color=plt.cm.jet(i/max_block_len))
+                proj_hidden_states_block[i:i + 2, 0],
+                proj_hidden_states_block[i:i + 2, 1],
+                color=plt.cm.jet(i / max_block_len))
             ax.text(
-                proj_hidden_states_block[i+1, 0],
-                proj_hidden_states_block[i+1, 1],
+                proj_hidden_states_block[i + 1, 0],
+                proj_hidden_states_block[i + 1, 1],
                 str(stimuli[i]))
 
     hook_input['tensorboard_writer'].add_figure(
@@ -432,7 +466,6 @@ def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
 
 
 def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
-
     fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
 
     # plot each fixed point in phase space
@@ -443,7 +476,8 @@ def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
         fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli)
 
     num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
-    fig, axes = plt.subplots(num_stimuli, 2,  # rows, cols
+    fig, axes = plt.subplots(nrows=num_stimuli,
+                             ncols=2,  # rows, cols
                              gridspec_kw={"width_ratios": [1, 1]},
                              figsize=(12, 8),
                              sharex=True,
@@ -456,7 +490,7 @@ def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
         rewards_to_hidden='tab:green')
 
     for c, (side, jacobians_by_stimuli) in \
-        enumerate(jacobians_by_side_by_stimuli.items()):
+            enumerate(jacobians_by_side_by_stimuli.items()):
 
         for r, (stimulus, jacobians) in enumerate(jacobians_by_stimuli.items()):
 
@@ -494,7 +528,6 @@ def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
             ax.add_patch(circle)
 
     fig.suptitle(f'Hidden to Hidden Jacobians\' Eigenvalues')
-    # plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_to_hidden_jacobian_eigenvalues_complex_plane',
         figure=fig,
@@ -503,8 +536,7 @@ def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
 
 
 def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
-
-
+    
     fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
 
     # plot each fixed point in phase space
@@ -515,7 +547,8 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
         fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli)
 
     num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
-    fig, axes = plt.subplots(num_stimuli, 2,  # rows, cols
+    fig, axes = plt.subplots(nrows=num_stimuli,
+                             ncols=2,  # rows, cols
                              gridspec_kw={"width_ratios": [1, 1]},
                              figsize=(12, 8),
                              sharex=True,
@@ -528,7 +561,7 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
         rewards_to_hidden='tab:green')
 
     for c, (side, jacobians_by_stimuli) in \
-        enumerate(jacobians_by_side_by_stimuli.items()):
+            enumerate(jacobians_by_side_by_stimuli.items()):
 
         for r, (stimulus, jacobians) in enumerate(jacobians_by_stimuli.items()):
 
@@ -548,7 +581,7 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
 
                 jacobian_eigvals = np.linalg.eigvals(jacobian)
                 time_constants = np.sort(np.abs(1. / np.log(np.abs(jacobian_eigvals))))[::-1]
-                eigvals_indices = np.arange(1, 1+len(jacobian_eigvals))
+                eigvals_indices = np.arange(1, 1 + len(jacobian_eigvals))
 
                 sc = ax.scatter(
                     eigvals_indices,
@@ -569,7 +602,6 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
 
 
 def hook_plot_model_weights(hook_input):
-
     weights = dict(
         readout=hook_input['model'].readout.weight.data.numpy()
     )
@@ -585,20 +617,22 @@ def hook_plot_model_weights(hook_input):
         vmin = np.minimum(vmin, np.min(weight))
         vmax = np.maximum(vmax, np.max(weight))
 
-    fig, axes = plt.subplots(1, 3,  # rows, cols
+    fig, axes = plt.subplots(nrows=1,
+                             ncols=3,  # rows, cols
                              gridspec_kw={"width_ratios": [1, 1, 1]},
                              figsize=(12, 8))
+    recurrent_mask_str = hook_input['model'].model_kwargs['connectivity_kwargs']['recurrent_mask']
+    fig.suptitle(f'Model Weights (Recurrent Mask: {recurrent_mask_str})')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
     for i, (weight_str, weight_matrix) in enumerate(weights.items()):
         ax = axes[i]
-        ax.set_title(f'{weight_str} Weights')
+        ax.set_title(f'{weight_str}')
         # ax.set_xlabel('Hidden Unit Number')
         # ax.set_ylabel('Hidden Unit Number')
         ax.set_aspect("equal")  # ensures little squares don't become rectangles
-        ax = sns.heatmap(weight_matrix, cmap='RdBu_r', square=True, ax=ax,
-                         cbar_kws={'shrink': 0.5}, vmin=vmin, vmax=vmax)
-        ax.invert_yaxis()
+        sns.heatmap(weight_matrix, cmap='RdBu_r', square=True, ax=ax,
+                         cbar_kws={'label': 'Weight Strength', 'shrink': 0.5}, vmin=vmin, vmax=vmax)
 
     hook_input['tensorboard_writer'].add_figure(
         tag='model_weights',
@@ -644,9 +678,8 @@ def hook_plot_psychometric_curves(hook_input):
     fig, ax = plt.subplots(figsize=(12, 8))
     for preferred_side, preferred_side_group \
             in trial_data.groupby('stimuli_preferred_sides'):
-
         stimuli_strengths = preferred_side * (
-            preferred_side_group['stimuli'] - preferred_side_group['stimuli_sides'])  # preferred_side
+                preferred_side_group['stimuli'] - preferred_side_group['stimuli_sides'])  # preferred_side
 
         ax.plot(stimuli_strengths,
                 preferred_side_group['model_correct_action_probs'],
@@ -671,7 +704,6 @@ def hook_plot_psychometric_curves(hook_input):
 
 
 def hook_plot_psytrack_fit(hook_input):
-
     trial_data = hook_input['run_envs_output']['trial_data']
 
     # drop block 1, keep only env 0
@@ -701,8 +733,8 @@ def hook_plot_psytrack_fit(hook_input):
 
     # create subplots
     fig, axes = plt.subplots(
-        4,  # rows
-        1,  # columns
+        nrows=4,
+        ncols=1,
         figsize=(12, 8),
         sharex=True,
         gridspec_kw={'height_ratios': [1, 1, 1, 1]})

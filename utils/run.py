@@ -20,7 +20,9 @@ def create_model(model_str=None,
                 hidden_size=50),
             param_init='default',
             connectivity_kwargs=dict(
-                recurrent_mask='small_world',
+                input_mask='none',
+                recurrent_mask='none',
+                readout_mask='none',
             ))
 
     # model = create_model(
