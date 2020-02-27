@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import networkx
 import numpy as np
 import scipy.linalg
 import torch
@@ -10,13 +11,11 @@ class FeedforwardModel(nn.Module):
 
     def __init__(self,
                  model_str,
-                 model_kwargs,
-                 input_size=2,
-                 output_size=2):
+                 model_kwargs):
 
         super(FeedforwardModel, self).__init__()
-        self.input_size = input_size
-        self.output_size = output_size
+        self.input_size = model_kwargs['input_size']
+        self.output_size = model_kwargs['output_size']
         self.model_str = model_str
         self.model_kwargs = model_kwargs
 
@@ -93,30 +92,33 @@ class RecurrentModel(nn.Module):
 
     def __init__(self,
                  model_str,
-                 model_kwargs,
-                 input_size=2,
-                 output_size=2):
+                 model_kwargs):
 
         super(RecurrentModel, self).__init__()
-        self.input_size = input_size
-        self.output_size = output_size
+        self.input_size = model_kwargs['input_size']
+        self.output_size = model_kwargs['output_size']
 
         # create and save core i.e. the recurrent step
         self.core = self._create_core(
             model_str=model_str,
             model_kwargs=model_kwargs)
-        self.connectivity_mask = self._create_connectivity_mask(
+
+        masks = self._create_connectivity_masks(
             model_str=model_str,
             model_kwargs=model_kwargs)
+        self.input_mask = masks['input_mask']
+        self.recurrent_mask = masks['recurrent_mask']
+        self.readout_mask = masks['readout_mask']
+
         self.model_str = model_str
         self.model_kwargs = model_kwargs
 
         self.description_str = create_description_str(model=self)
 
         self.core_hidden = None
-        self.linear = nn.Linear(
+        self.readout = nn.Linear(
             in_features=model_kwargs['core_kwargs']['hidden_size'],
-            out_features=output_size,
+            out_features=self.output_size,
             bias=True)
         self.softmax = nn.Softmax(dim=-1)
 
@@ -181,32 +183,80 @@ class RecurrentModel(nn.Module):
 
         return core
 
-    def _create_connectivity_mask(self, model_str, model_kwargs):
+    def _create_connectivity_masks(self, model_str, model_kwargs):
 
         hidden_size = model_kwargs['core_kwargs']['hidden_size']
 
-        if model_kwargs['connectivity_mask'] == 'none':
-            connectivity_mask = np.ones((hidden_size, hidden_size))
-        elif model_kwargs['connectivity_mask'] == 'diagonal':
-            connectivity_mask = np.eye(hidden_size)
-        elif model_kwargs['connectivity_mask'] == 'two_block_diag':
-            # check divisibility by exactly two
-            assert 2 * (hidden_size // 2) == hidden_size
-            connectivity_mask = scipy.linalg.block_diag(
-                np.ones((hidden_size // 2, hidden_size // 2)),
-                np.ones((hidden_size // 2, hidden_size // 2)))
-        elif model_kwargs['connectivity_mask'] == 'circulant':
-            first_column = np.zeros(hidden_size)
-            # set 30% overlap
-            first_column[:int(0.3*hidden_size)] = 1.
+        # if mask not specifies, set to defaults
+        for mask_str in ['input_mask', 'recurrent_mask', 'readout_mask']:
+            if mask_str not in model_kwargs['connectivity_kwargs']:
+                if mask_str == 'input_mask':
+                    model_kwargs['connectivity_kwargs'][mask_str] = mask_str
+                elif mask_str == 'readout_mask':
+                    model_kwargs['connectivity_kwargs'][mask_str] = mask_str
+                elif mask_str == 'recurrent_mask':
+                    model_kwargs['connectivity_kwargs'][mask_str] = 'none'
+
+        # create input-to-hidden, hidden-to-hidden, hidden-to-readout masks
+        masks = dict()
+        for mask_str, mask_type_str in model_kwargs['connectivity_kwargs'].items():
+
+            if mask_str == 'input_mask':
+                mask_shape = (hidden_size, self.input_size)
+            elif mask_str == 'recurrent_mask':
+                mask_shape = (hidden_size, hidden_size)
+            elif mask_str == 'readout_mask':
+                mask_shape = (self.output_size, hidden_size)
+            else:
+                raise ValueError(f'Unrecognized mask str: {mask_str}')
+
+            mask = self._create_mask(
+                mask_type_str=mask_type_str,
+                output_shape=mask_shape[0],
+                input_shape=mask_shape[1])
+
+            masks[mask_str] = mask
+
+        return masks
+
+    def _create_mask(self, mask_type_str, output_shape, input_shape):
+
+        if mask_type_str == 'none':
+            connectivity_mask = np.ones(shape=(output_shape, input_shape))
+        elif mask_type_str == 'input_mask':
+            # special case for input - zeros except for first 30% of rows
+            connectivity_mask = np.zeros(shape=(output_shape, input_shape))
+            connectivity_mask[:int(0.3 * output_shape), :] = 1
+        elif mask_type_str == 'readout_mask':
+            # special case for output -
+            connectivity_mask = np.zeros(shape=(output_shape, input_shape))
+            connectivity_mask[:, -int(0.3 * input_shape):] = 1
+        elif mask_type_str == 'diagonal':
+            connectivity_mask = np.eye(N=output_shape, M=input_shape)
+        elif mask_type_str == 'circulant':
+            first_column = np.zeros(shape=output_shape)
+            first_column[:int(0.2*output_shape)] = 1.
             connectivity_mask = scipy.linalg.circulant(c=first_column)
-        elif model_kwargs['connectivity_mask'] == 'toeplitz':
-            first_column = np.zeros(hidden_size)
-            # set 30% overlap
-            first_column[:int(0.3*hidden_size)] = 1.
+        elif mask_type_str == 'toeplitz':
+            first_column = np.zeros(shape=output_shape)
+            first_column[:int(0.2 * output_shape)] = 1.
             connectivity_mask = scipy.linalg.toeplitz(c=first_column)
+        elif mask_type_str == 'small_world':
+            graph = networkx.watts_strogatz_graph(
+                n=output_shape,
+                k=int(0.2 * output_shape),
+                p=0.05)
+            connectivity_mask = networkx.to_numpy_matrix(G=graph)
+        elif mask_type_str.endswith('_block_diag'):
+            # extract leading integer
+            num_blocks = int(mask_type_str.split('_')[0])
+            subblock_size = output_shape // num_blocks
+            # check output size is exactly divisible by number of blocks
+            assert num_blocks * subblock_size == output_shape
+            connectivity_mask = scipy.linalg.block_diag(
+                *[np.ones((subblock_size, subblock_size))] * num_blocks)
         else:
-            raise ValueError('Unrecognized connectivity mask: ', model_kwargs['connectivity_mask'])
+            raise ValueError(f'Unrecognized mask type str: {mask_type_str}')
 
         connectivity_mask = torch.from_numpy(connectivity_mask).double()
         return connectivity_mask
@@ -249,7 +299,7 @@ class RecurrentModel(nn.Module):
         else:
             raise NotImplementedError
 
-        linear_output = self.linear(core_output)
+        linear_output = self.readout(core_output)
 
         # shape: (batch size, 1, output dim e.g. 2)
         softmax_output = self.softmax(linear_output)
@@ -265,9 +315,16 @@ class RecurrentModel(nn.Module):
     def reset_core_hidden(self):
         self.core_hidden = None
 
-    def apply_connectivity_mask(self):
+    def apply_connectivity_masks(self):
+
+        self.readout.weight.data[:] = torch.mul(
+            self.readout.weight, self.readout_mask)
+
         if self.model_str == 'rnn':
-            self.core.weight_hh_l0.data[:] = torch.mul(self.core.weight_hh_l0, self.connectivity_mask)
+            self.core.weight_ih_l0.data[:] = torch.mul(
+                self.core.weight_ih_l0, self.input_mask)
+            self.core.weight_hh_l0.data[:] = torch.mul(
+                self.core.weight_hh_l0, self.recurrent_mask)
         else:
             raise NotImplementedError('Implement masking for non-RNN model')
 

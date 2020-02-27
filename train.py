@@ -15,16 +15,7 @@ def main():
     torch.manual_seed(seed)
     np.random.seed(seed=seed)
 
-    model = create_model(
-        model_str='rnn',
-        model_kwargs=dict(core_kwargs=dict(num_layers=1, hidden_size=10),
-                          param_init='default',
-                          connectivity_mask='toeplitz'))
-
-    # model = create_model(
-    #     model_str='ff',
-    #     model_kwargs=dict(ff_kwargs=dict(activation_str='relu',
-    #                                      layer_widths=[10, 10])))
+    model = create_model()
 
     log_dir = os.path.join('runs', model.description_str + '_' + str(datetime.now()))
     tensorboard_writer = SummaryWriter(log_dir=log_dir)
@@ -73,8 +64,8 @@ def train_model(model,
     grad_step = start_grad_step
 
     for grad_step in range(start_grad_step, start_grad_step + num_grad_steps):
-        if hasattr(model, 'apply_connectivity_mask'):
-            model.apply_connectivity_mask()
+        if hasattr(model, 'apply_connectivity_masks'):
+            model.apply_connectivity_masks()
         if hasattr(model, 'reset_core_hidden'):
             model.reset_core_hidden()
         optimizer.zero_grad()

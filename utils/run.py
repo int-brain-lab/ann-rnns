@@ -13,9 +13,20 @@ def create_model(model_str=None,
         model_str = 'rnn'
     if model_kwargs is None:
         model_kwargs = dict(
-            num_layers=2,
-            hidden_size=10,
-            param_init='default')
+            input_size=2,
+            output_size=2,
+            core_kwargs=dict(
+                num_layers=1,
+                hidden_size=50),
+            param_init='default',
+            connectivity_kwargs=dict(
+                recurrent_mask='small_world',
+            ))
+
+    # model = create_model(
+    #     model_str='ff',
+    #     model_kwargs=dict(ff_kwargs=dict(activation_str='relu',
+    #                                      layer_widths=[10, 10])))
 
     if model_str in {'rnn', 'lstm', 'gru'}:
         model = RecurrentModel(

@@ -121,30 +121,6 @@ def hook_plot_hidden_state_correlations(hook_input):
         close=True)
 
 
-def hook_plot_hidden_state_recurrent_weights(hook_input):
-
-    if hook_input['model'].model_str == 'rnn':
-        hidden_state_weights = hook_input['model'].core.weight_hh_l0.data
-    else:
-        raise NotImplementedError
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax = sns.heatmap(hidden_state_weights, cmap='RdBu_r', square=True,
-                     # vmin=-10., vmax=10.,
-                     cbar_kws={'label': 'weight'})
-    fig.suptitle('Hidden Units Recurrent Weights')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    ax.invert_yaxis()
-    ax.set_xlabel('Hidden Unit Number')
-    ax.set_ylabel('Hidden Unit Number')
-    ax.set_aspect("equal")  # ensures little squares don't become rectangles
-    hook_input['tensorboard_writer'].add_figure(
-        tag='hidden_state_recurrent_weights',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
-
-
 def hook_plot_hidden_state_projected_fixed_points(hook_input):
 
     displacement_norm_cutoff = 0.5
@@ -592,6 +568,73 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
         close=True)
 
 
+def hook_plot_model_weights(hook_input):
+
+    weights = dict(
+        readout=hook_input['model'].readout.weight.data.numpy()
+    )
+    if hook_input['model'].model_str == 'rnn':
+        weights['input'] = hook_input['model'].core.weight_ih_l0.data.numpy()
+        weights['recurrent'] = hook_input['model'].core.weight_hh_l0.data.numpy()
+    else:
+        raise NotImplementedError
+
+    # compute min, max
+    vmin, vmax = np.inf, -np.inf
+    for weight in weights.values():
+        vmin = np.minimum(vmin, np.min(weight))
+        vmax = np.maximum(vmax, np.max(weight))
+
+    fig, axes = plt.subplots(1, 3,  # rows, cols
+                             gridspec_kw={"width_ratios": [1, 1, 1]},
+                             figsize=(12, 8))
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    for i, (weight_str, weight_matrix) in enumerate(weights.items()):
+        ax = axes[i]
+        ax.set_title(f'{weight_str} Weights')
+        # ax.set_xlabel('Hidden Unit Number')
+        # ax.set_ylabel('Hidden Unit Number')
+        ax.set_aspect("equal")  # ensures little squares don't become rectangles
+        ax = sns.heatmap(weight_matrix, cmap='RdBu_r', square=True, ax=ax,
+                         cbar_kws={'shrink': 0.5}, vmin=vmin, vmax=vmax)
+        ax.invert_yaxis()
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag='model_weights',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
+def hook_plot_model_weights_gradients(hook_input):
+    model = hook_input['model']
+    if model.model_str == 'rnn':
+        recurrent_weight_grad = model.core.weight_hh_l0.grad.numpy()
+    elif model.model_str == 'gru':
+        raise NotImplementedError
+    elif model.model_str == 'lstm':
+        raise NotImplementedError
+    else:
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax = sns.heatmap(recurrent_weight_grad, cmap='RdBu_r', square=True,
+                     vmin=-0.1, vmax=0.1,
+                     cbar_kws={'label': 'Gradient Value'})
+    fig.suptitle('Recurrent Weight Matrix Gradients')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    ax.invert_yaxis()
+    ax.set_xlabel('Hidden Unit Number')
+    ax.set_ylabel('Hidden Unit Number')
+    ax.set_aspect("equal")  # ensures little squares don't become rectangles
+    hook_input['tensorboard_writer'].add_figure(
+        tag='recurrent_weight_matrix_gradients',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
 def hook_plot_psychometric_curves(hook_input):
     # drop block number 1
     # at least until we can figure out what to do with zero-initialized hidden state
@@ -622,35 +665,6 @@ def hook_plot_psychometric_curves(hook_input):
     ax.legend(numpoints=1, loc='best')
     hook_input['tensorboard_writer'].add_figure(
         tag='psychometric_curves',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
-
-
-def hook_plot_recurrent_weight_gradients(hook_input):
-
-    model = hook_input['model']
-    if model.model_str == 'rnn':
-        recurrent_weight_grad = model.core.weight_hh_l0.grad.numpy()
-    elif model.model_str == 'gru':
-        raise NotImplementedError
-    elif model.model_str == 'lstm':
-        raise NotImplementedError
-    else:
-        return
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax = sns.heatmap(recurrent_weight_grad, cmap='RdBu_r', square=True,
-                     vmin=-0.1, vmax=0.1,
-                     cbar_kws={'label': 'Gradient Value'})
-    fig.suptitle('Recurrent Weight Matrix Gradients')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    ax.invert_yaxis()
-    ax.set_xlabel('Hidden Unit Number')
-    ax.set_ylabel('Hidden Unit Number')
-    ax.set_aspect("equal")  # ensures little squares don't become rectangles
-    hook_input['tensorboard_writer'].add_figure(
-        tag='recurrent_weight_matrix_gradients',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)
