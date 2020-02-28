@@ -1,3 +1,4 @@
+import pandas as pd
 import gym
 from gym import spaces
 import numpy as np
@@ -9,12 +10,270 @@ from utils.stimuli import VectorStimulusCreator
 from utils.vec_env import VecEnv
 
 
+class IBLSession(gym.Env):
+
+    def __init__(self,
+                 stimulus_creator=VectorStimulusCreator(),
+                 block_side_probs=((0.8, 0.2), (0.2, 0.8)),
+                 loss_fn_str='nll',
+                 blocks_per_session=10,
+                 trials_per_block_param=1 / 60,
+                 min_trials_per_block=60,
+                 max_trials_per_block=100,
+                 max_rnn_steps_per_trial=10):
+
+        """
+
+        :param stimulus_creator: object that must have
+            observation_space: type gym.spaces
+            create_block_stimuli(): method that generates stimuli
+        :param loss_fn_str:
+        :param blocks_per_session:
+        :param trials_per_block_param:
+        :param max_rnn_steps_per_trial:
+        """
+
+        self._check_stimulus_creator(
+            stimulus_creator=stimulus_creator)
+        self.stimulus_creator = stimulus_creator
+
+        # probability of this block
+        self.block_side_probs = block_side_probs
+
+        self.blocks_per_session = blocks_per_session
+        self.min_trials_per_block = min_trials_per_block
+        self.max_trials_per_block = max_trials_per_block
+        self.trials_per_block_param = trials_per_block_param
+        self.max_rnn_steps_per_trial = max_rnn_steps_per_trial
+        self.action_space = spaces.Discrete(2)  # left or right
+        self.observation_space = stimulus_creator.observation_space
+        self.reward_range = (0, 1)
+        self.loss_fn = self.create_loss_fn(loss_fn_str=loss_fn_str)
+        self.reward_fn = self.create_reward_fn()
+
+        # to (re)initialize the following variables, call self.reset()
+        self.num_trials_per_block = None
+        self.session_data = None
+        self.stimuli = None
+        self.trial_stimulus_side = None
+        self.block_stimulus_side = None
+        self.losses = None
+        self.current_trial_within_block = None
+        self.current_block_within_session = None
+        self.current_rnn_step_within_trial = None
+        self.current_trial = None
+        self.current_rnn_step = None
+        self.total_num_rnn_steps = None
+
+    @staticmethod
+    def _check_stimulus_creator(stimulus_creator):
+
+        # check that stimulus_creator is valid object
+        assert stimulus_creator is not None
+        assert hasattr(stimulus_creator, 'create_block_stimuli')
+        assert hasattr(stimulus_creator, 'observation_space')
+
+    @staticmethod
+    def create_loss_fn(loss_fn_str):
+        """
+
+        :param loss_fn_str: str specifying the desired loss function
+        :return: loss_fn:   must have two keyword arguments, target and input
+                            target.shape should be (batch size = 1,)
+                            input.shape should be (batch size = 1, num actions = 2,)
+        """
+
+        if loss_fn_str == 'nll':
+            loss_fn = NLLLoss()
+        else:
+            raise NotImplementedError
+        return loss_fn
+
+    @staticmethod
+    def create_reward_fn():
+        """
+        :return: reward_fn:   must have two keyword arguments, target and input
+                    target.shape should be (batch size = 1,)
+                    input.shape should be (batch size = 1, num actions = 2,)
+        """
+
+        def reward_fn(target, input):
+            # TODO: add negative reward for low confidence action
+            reward = target == torch.max(input, dim=1)[1]  # max returns (value, index)
+            # add time delay penalty
+            reward = reward.double() - 0.05
+            return reward.double()
+
+        return reward_fn
+
+    def close(self):
+        pass
+
+    def reset(self):
+        """
+        (Re)initializes experiment.
+
+        Previously, we relied on the fact that the RNN had a fixed number of
+        steps per trial to preallocate the entire session, and then iterated
+        over the preallocated values. This is no longer the case because the
+        model can now decide to act faster or slower.
+        """
+
+        # sample number of trials per block, ensuring values are between
+        # [min_trials_per_block, max_trials_per_block]
+        self.num_trials_per_block = [np.random.geometric(p=self.trials_per_block_param)
+                                     for _ in range(self.blocks_per_session)]
+        for i in range(len(self.num_trials_per_block)):
+            num_trials = self.num_trials_per_block[i]
+            if num_trials < self.min_trials_per_block:
+                self.num_trials_per_block[i] = self.min_trials_per_block
+            if num_trials > self.max_trials_per_block:
+                self.num_trials_per_block[i] = self.max_trials_per_block
+
+        # create Pandas DataFrame for tracking all session data
+        max_rnn_steps_per_session = np.sum(self.num_trials_per_block) * self.max_rnn_steps_per_trial
+        index = np.arange(max_rnn_steps_per_session)
+        columns = ['rnn_step_within_session',
+                   'block_index', 'trial_index', 'rnn_step_index',
+                   'left_stimulus', 'right_stimulus', 'trial_stimulus_side',
+                   'block_stimulus_side', 'loss', 'reward',
+                   'left_action_prob', 'right_action_prob',
+                   'hidden_state']
+        self.session_data = pd.DataFrame(
+            np.nan,  # initialize all to nan
+            index=index,
+            columns=columns,
+            dtype=np.float16)
+
+        # enable storing hidden states in the dataframe.
+        # need to make the column have type object to doing so possible
+        self.session_data.hidden_state = self.session_data.hidden_state.astype(object)
+
+        self.current_trial_within_block = 0
+        self.current_block_within_session = 0
+        self.current_rnn_step_within_trial = 0
+        self.current_trial = 0
+        self.current_rnn_step = 0
+        self.total_num_rnn_steps = 0
+
+        # choose first block bias with 50-50 probability
+        # TODO: figure out what to do with stimuli strengths
+        current_block_side = np.random.choice([0, 1])
+        stimuli, trial_stimulus_side, stimuli_strengths = [], [], []
+        block_stimulus_side = []
+        for num_trials in self.num_trials_per_block:
+            stimulus_creator_output = self.stimulus_creator.create_block_stimuli(
+                num_trials=num_trials,
+                block_side_bias_probabilities=self.block_side_probs[current_block_side])
+            stimuli.append(stimulus_creator_output['stimuli'])
+            trial_stimulus_side.append(stimulus_creator_output['sampled_sides'])
+            block_stimulus_side.append(-1 if current_block_side == 0 else 1)
+            current_block_side = 1 if current_block_side == 0 else 1
+
+        # flatten each list of numpy arrays and convert to torch tensors
+        self.stimuli = torch.from_numpy(np.concatenate(stimuli))
+        self.trial_stimulus_side = torch.from_numpy(np.concatenate(trial_stimulus_side))
+        self.block_stimulus_side = np.array(block_stimulus_side)
+        self.losses = torch.zeros(max_rnn_steps_per_session)
+
+        # create first observation
+        step_output = dict(
+            stimulus=self.stimuli[self.current_trial].reshape((1, -1)),
+            reward=torch.zeros(1).double().requires_grad_(True),
+            loss=torch.zeros(1).double().requires_grad_(True),
+            info=None,
+            done=True if self.current_block_within_session == self.blocks_per_session else False)
+
+        return step_output
+
+    def step(self,
+             model_softmax_output,
+             model_hidden):
+        """
+
+        :param model_softmax_output: shape (time step=1, 2)
+        :param model_hidden:
+        :return:
+        """
+
+        left_action_prob = model_softmax_output[0, 0].item()
+        right_action_prob = model_softmax_output[0, 1].item()
+        correct_action_index = ((self.trial_stimulus_side[self.current_trial].reshape((1,)) + 1) // 2)
+        correct_action_prob = model_softmax_output[0, correct_action_index.item()].item()
+
+        # target has shape (batch=1,)
+        # reshape action to (batch=1, 2) since loss fn has no notion of sequence
+        loss = self.loss_fn(
+            target=correct_action_index,
+            input=model_softmax_output)
+        self.losses[self.current_rnn_step] = loss
+
+        reward = self.reward_fn(
+            target=correct_action_index,
+            input=model_softmax_output)
+
+        # record data
+        timestep_data = dict(
+            block_index=self.current_block_within_session,
+            trial_index=self.current_trial_within_block,
+            rnn_step_index=self.current_rnn_step_within_trial,
+            rnn_step_within_session=self.current_rnn_step,
+            left_stimulus=self.stimuli[self.current_trial_within_block][0].numpy(),
+            right_stimulus=self.stimuli[self.current_trial_within_block][1].numpy(),
+            trial_stimulus_side=self.trial_stimulus_side[self.current_trial].item(),
+            block_stimulus_side=self.block_stimulus_side[self.current_trial].item(),
+            loss=loss.item(),
+            reward=reward.item(),
+            left_action_prob=left_action_prob,
+            right_action_prob=right_action_prob,
+            correct_action_prob=correct_action_prob,
+            hidden_state=model_hidden.detach().numpy())
+
+        for column, value in timestep_data.items():
+            self.session_data.at[self.current_rnn_step, column] = value
+
+        # increment counters
+        # current rnn step always advances
+        self.current_rnn_step += 1
+
+        # advance current rnn step within trial.
+        self.current_rnn_step_within_trial += 1
+
+        # move to next trial
+        if self.current_rnn_step_within_trial == self.max_rnn_steps_per_trial:
+
+            self.current_rnn_step_within_trial = 0
+            self.current_trial_within_block += 1
+
+            # move to next block
+            if self.current_trial_within_block == self.num_trials_per_block[self.current_block_within_session]:
+                self.current_block_within_session += 1
+                self.current_rnn_step_within_trial = 0
+                self.current_trial_within_block = 0
+
+        stimulus = self.stimuli[self.current_trial_within_block]
+
+        # store any additional desired information
+        info = dict()
+
+        # loss is used by the optimizer
+        # reward is (possibly different) input to the model at the next time step
+        step_output = dict(
+            loss=loss,
+            stimulus=stimulus.reshape((1, -1)),
+            reward=reward,
+            info=info,
+            done=True if self.current_block_within_session == self.blocks_per_session else False)
+
+        return step_output
+
+
 def create_envs(kwargs,
                 num_envs):
-
     def make_env(kwargs):
         def _f():
-            return ReversalLearningTask(**kwargs)
+            return IBLSession(**kwargs)
+
         return _f
 
     envs = VecEnv(make_env_fn=make_env(kwargs=kwargs), num_env=num_envs)
@@ -28,11 +287,9 @@ def create_training_choice_world(batch_size):
     """
 
     kwargs = dict(
-        num_blocks=10,
-        stimulus_creator=VectorStimulusCreator(),
-        left_bias_probs=[0.5, 0.5],
-        right_bias_probs=[0.5, 0.5])
-    training_choice_worlds = [ReversalLearningTask(**kwargs)
+        blocks_per_session=10,
+        stimulus_creator=VectorStimulusCreator())
+    training_choice_worlds = [IBLSession(**kwargs)
                               for _ in range(batch_size)]
     return training_choice_worlds
 
@@ -46,212 +303,17 @@ def create_biased_choice_worlds(tensorboard_writer,
     """
 
     kwargs = dict(
-        num_blocks=100,  # 10
-        stimulus_creator=VectorStimulusCreator(),
-        left_bias_probs=[0.8, 0.2],
-        right_bias_probs=[0.2, 0.8])
+        blocks_per_session=2,
+        stimulus_creator=VectorStimulusCreator())
     envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
 
 
 def create_custom_worlds(tensorboard_writer,
                          num_envs=1,
-                         num_blocks=3,
-                         left_bias_probs=(0.8, 0.2),
-                         right_bias_probs=(0.2, 0.8)):
-
+                         blocks_per_session=3):
     kwargs = dict(
-        num_blocks=num_blocks,  # 10
-        stimulus_creator=VectorStimulusCreator(),
-        left_bias_probs=left_bias_probs,
-        right_bias_probs=right_bias_probs)
+        blocks_per_session=blocks_per_session,
+        stimulus_creator=VectorStimulusCreator())
     envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
-
-
-class ReversalLearningTask(gym.Env):
-
-    def __init__(self,
-                 stimulus_creator,
-                 loss_fn_str='nll',
-                 num_blocks=10,
-                 block_duration_param=1/60,
-                 left_bias_probs=None,
-                 right_bias_probs=None):
-
-        self.stimulus_creator = stimulus_creator
-        self.num_blocks = num_blocks
-        self.block_duration_param = block_duration_param
-        self.action_space = spaces.Discrete(2)  # left or right
-        self.observation_space = stimulus_creator.observation_space
-        self.reward_range = (0, 1)
-        self.loss_fn = self.create_loss_fn(loss_fn_str=loss_fn_str)
-        self.reward_fn = self.create_reward_fn()
-
-        # store the probability of a stimulus appearing on a particular side
-        # within a biased block
-        if right_bias_probs is None:
-            right_bias_probs = [0.8, 0.2]
-        if left_bias_probs is None:
-            left_bias_probs = [0.2, 0.8]
-        self.side_bias_probs = dict(
-            left=left_bias_probs,
-            right=right_bias_probs)
-
-        # to (re)initialize the following variables, call self.reset()
-        self.num_trials_per_block = None
-        self.stimuli_block_number = None
-        self.trial_num_within_block = None
-        self.stimuli = None
-        self.stimuli_sides = None
-        self.stimuli_strengths = None
-        self.stimuli_preferred_sides = None
-        self.losses = None  # loss is used by optimizer
-        self.rewards = None  # reward is input to model at next time step
-        self.actions = None
-        self.model_hidden_states = None
-        self.current_trial_idx = None
-        self.total_num_trials = None
-
-        # TODO: perhaps distinguish between creating new values vs resetting index to repeat previous values
-
-    @staticmethod
-    def create_loss_fn(loss_fn_str):
-        """
-
-        :param loss_fn_str:
-        :return: loss_fn:   must have two keyword arguments, target and input
-                            target.shape should be (batch size = 1,)
-                            input.shape should be (batch size = 1, num actions = 2,)
-        """
-
-        if loss_fn_str == 'nll':
-            loss_fn = NLLLoss()
-        elif loss_fn_str == '':
-            loss_fn = 10
-        return loss_fn
-
-    @staticmethod
-    def create_reward_fn():
-        """
-
-        :param reward_fn_str:
-        :return: reward_fn:   must have two keyword arguments, target and input
-                    target.shape should be (batch size = 1,)
-                    input.shape should be (batch size = 1, num actions = 2,)
-        """
-        def reward_fn(target, input):
-            reward = target == torch.max(input, dim=1)[1]  # max returns (value, index)
-            return reward.double()
-
-        return reward_fn
-
-    def close(self):
-        pass
-
-    def reset(self):
-        """
-        (Re)initializes experiment.
-
-        """
-
-        self.num_trials_per_block = [np.random.geometric(p=self.block_duration_param)
-                                     for _ in range(self.num_blocks)]
-
-        # truncate to [20, 100]
-        for i in range(len(self.num_trials_per_block)):
-            num_trials = self.num_trials_per_block[i]
-            if num_trials < 20:
-                self.num_trials_per_block[i] = 20
-            if num_trials > 100:
-                self.num_trials_per_block[i] = 100
-
-        self.stimuli_block_number = np.concatenate([
-            np.full(shape=nt, fill_value=i) for nt, i
-            in zip(self.num_trials_per_block, np.arange(len(self.num_trials_per_block)))])
-        self.trial_num_within_block = np.concatenate([
-            np.arange(1, 1+nt) for nt in self.num_trials_per_block])
-        self.total_num_trials = np.sum(self.num_trials_per_block)
-
-        curr_preferred_side = np.random.choice(['left', 'right'])
-        blocks_stimuli, blocks_stimuli_sides, blocks_stimuli_strengths = [], [], []
-        blocks_preferred_sides = []
-        for block_num_trials in self.num_trials_per_block:
-            output = self.stimulus_creator.create_block_stimuli(
-                block_num_trials=block_num_trials,
-                block_side_bias_probabilities=self.side_bias_probs[curr_preferred_side])
-            blocks_preferred_sides.append(np.full(
-                shape=block_num_trials,
-                fill_value=-1. if curr_preferred_side == 'left' else 1.))
-            curr_preferred_side = 'right' if curr_preferred_side == 'left' else 'left'
-            blocks_stimuli.append(output['sampled_stimuli'])
-            blocks_stimuli_sides.append(output['sampled_sides'])
-            blocks_stimuli_strengths.append(output['sampled_strengths'])
-
-        # flatten each list of numpy arrays to single torch array
-        self.stimuli = torch.from_numpy(np.concatenate(blocks_stimuli))
-        self.stimuli_sides = torch.from_numpy(np.concatenate(blocks_stimuli_sides))
-        self.stimuli_preferred_sides = torch.from_numpy(np.concatenate(blocks_preferred_sides))
-        self.stimuli_strengths = torch.from_numpy(np.concatenate(blocks_stimuli_strengths))
-        self.losses = torch.zeros((self.total_num_trials,))
-        self.rewards = torch.zeros((self.total_num_trials,))
-        self.actions = torch.zeros((self.total_num_trials, 2))
-        self.model_hidden_states = []
-        self.current_trial_idx = 0
-
-        # create first observation
-        step_output = dict(
-            stimulus=self.stimuli[self.current_trial_idx].reshape((1, -1)),
-            reward=torch.zeros(1).double().requires_grad_(True),
-            loss=torch.zeros(1).double().requires_grad_(True),
-            info=None,
-            done=True if self.current_trial_idx == self.total_num_trials else False)
-
-        return step_output
-
-    def step(self,
-             model_softmax_output,
-             model_hidden):
-
-        model_action_probs = model_softmax_output.reshape((1, -1))
-
-        # model_softmax_output has shape (batch=1, length=1, 2)
-        # target has shape (batch=1,)
-        # reshape action to (batch=1, 2) since loss fn has no notion of sequence
-        loss = self.loss_fn(
-            target=(self.stimuli_sides[self.current_trial_idx].reshape((1,)) + 1) / 2,
-            input=model_action_probs)
-        self.losses[self.current_trial_idx] = loss
-
-        reward = self.reward_fn(
-            target=(self.stimuli_sides[self.current_trial_idx].reshape((1,)) + 1) / 2,
-            input=model_action_probs)
-        self.rewards[self.current_trial_idx] = reward
-
-        # store record of action
-        self.actions[self.current_trial_idx] = model_action_probs
-
-        # store record of model's hidden state
-        self.model_hidden_states.append(model_hidden.detach().numpy())
-
-        # increment trial counter
-        self.current_trial_idx += 1
-
-        stimulus = self.stimuli[self.current_trial_idx]
-        stimulus_side = self.stimuli_sides[self.current_trial_idx]
-        stimulus_strength = self.stimuli_strengths[self.current_trial_idx]
-
-        # store any additional desired information
-        info = dict(stimulus_side=stimulus_side,
-                    stimulus_strength=stimulus_strength)
-
-        # loss is used by the optimizer
-        # reward is (possibly different) input to the model at the next time step
-        step_output = dict(
-            loss=loss,
-            stimulus=stimulus.reshape((1, -1)),
-            reward=reward,
-            info=info,
-            done=True if (self.current_trial_idx + 1) == self.total_num_trials else False)
-
-        return step_output

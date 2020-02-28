@@ -7,85 +7,86 @@ import torch.nn as nn
 import torch.nn.init as init
 
 
-class FeedforwardModel(nn.Module):
-
-    def __init__(self,
-                 model_str,
-                 model_kwargs):
-
-        super(FeedforwardModel, self).__init__()
-        self.input_size = model_kwargs['input_size']
-        self.output_size = model_kwargs['output_size']
-        self.model_str = model_str
-        self.model_kwargs = model_kwargs
-
-        # create and save feedforward network
-        self.feedforward = self._create_feedforward(
-            model_kwargs=model_kwargs)
-        self.softmax = nn.Softmax(dim=-1)
-
-        self.description_str = create_description_str(model=self)
-
-        # converts all weights into doubles i.e. float64
-        # this prevents PyTorch from breaking when multiplying float32 * float64
-        self.double()
-
-        # dummy_input = torch.zeros(size=(10, 1, 1), dtype=torch.double)
-        # tensorboard_writer.add_graph(
-        #     model=self,
-        #     input_to_model=dict(stimulus=dummy_input))
-
-    def _create_feedforward(self,
-                            model_kwargs):
-
-        act_fn_str = model_kwargs['ff_kwargs']['activation_str']
-        if act_fn_str == 'relu':
-            act_fn_constructor = nn.ReLU
-        elif act_fn_str == 'sigmoid':
-            act_fn_constructor = nn.Sigmoid
-        elif act_fn_str == 'tanh':
-            act_fn_constructor = nn.Tanh
-        else:
-            raise NotImplementedError
-
-        layer_widths = [self.input_size] + list(model_kwargs['ff_kwargs']['layer_widths'])
-        feedforward = OrderedDict()
-        for i in range(len(layer_widths) - 1):
-            feedforward[f'linear_{i}'] = nn.Linear(
-                in_features=layer_widths[i],
-                out_features=layer_widths[i + 1])
-            feedforward[f'{act_fn_str}_{i}'] = act_fn_constructor()
-        feedforward[f'linear{i + 1}'] = nn.Linear(
-            in_features=layer_widths[-1],
-            out_features=self.output_size)
-        feedforward = nn.Sequential(feedforward)
-        return feedforward
-
-    def forward(self, model_input):
-
-        layer_input = torch.cat(
-            [model_input['stimulus'],
-             model_input['reward'].reshape(-1, 1, 1)],
-            dim=2)
-
-        # make sure no gradients backpropagate through
-        layer_input = layer_input.detach()
-
-        for i, layer in enumerate(self.feedforward):
-            if i == len(self.feedforward) - 2:
-                penultimate_layer = layer_input
-            layer_input = layer(layer_input)
-        feedforward_output = layer_input
-
-        # shape: (batch size, 1, output dim e.g. 2)
-        softmax_output = self.softmax(feedforward_output)
-
-        forward_output = dict(
-            feedforward_output=feedforward_output,
-            softmax_output=softmax_output,
-            core_hidden=penultimate_layer)
-
-        return forward_output
+# TODO: Fix FeedForward Model
+# class FeedforwardModel(nn.Module):
+#
+#     def __init__(self,
+#                  model_str,
+#                  model_kwargs):
+#
+#         super(FeedforwardModel, self).__init__()
+#         self.input_size = model_kwargs['input_size']
+#         self.output_size = model_kwargs['output_size']
+#         self.model_str = model_str
+#         self.model_kwargs = model_kwargs
+#
+#         # create and save feedforward network
+#         self.feedforward = self._create_feedforward(
+#             model_kwargs=model_kwargs)
+#         self.softmax = nn.Softmax(dim=-1)
+#
+#         self.description_str = create_description_str(model=self)
+#
+#         # converts all weights into doubles i.e. float64
+#         # this prevents PyTorch from breaking when multiplying float32 * float64
+#         self.double()
+#
+#         # dummy_input = torch.zeros(size=(10, 1, 1), dtype=torch.double)
+#         # tensorboard_writer.add_graph(
+#         #     model=self,
+#         #     input_to_model=dict(stimulus=dummy_input))
+#
+#     def _create_feedforward(self,
+#                             model_kwargs):
+#
+#         act_fn_str = model_kwargs['ff_kwargs']['activation_str']
+#         if act_fn_str == 'relu':
+#             act_fn_constructor = nn.ReLU
+#         elif act_fn_str == 'sigmoid':
+#             act_fn_constructor = nn.Sigmoid
+#         elif act_fn_str == 'tanh':
+#             act_fn_constructor = nn.Tanh
+#         else:
+#             raise NotImplementedError
+#
+#         layer_widths = [self.input_size] + list(model_kwargs['ff_kwargs']['layer_widths'])
+#         feedforward = OrderedDict()
+#         for i in range(len(layer_widths) - 1):
+#             feedforward[f'linear_{i}'] = nn.Linear(
+#                 in_features=layer_widths[i],
+#                 out_features=layer_widths[i + 1])
+#             feedforward[f'{act_fn_str}_{i}'] = act_fn_constructor()
+#         feedforward[f'linear{i + 1}'] = nn.Linear(
+#             in_features=layer_widths[-1],
+#             out_features=self.output_size)
+#         feedforward = nn.Sequential(feedforward)
+#         return feedforward
+#
+#     def forward(self, model_input):
+#
+#         layer_input = torch.cat(
+#             [model_input['stimulus'],
+#              model_input['reward'].reshape(-1, 1, 1)],
+#             dim=2)
+#
+#         # make sure no gradients backpropagate through
+#         layer_input = layer_input.detach()
+#
+#         for i, layer in enumerate(self.feedforward):
+#             if i == len(self.feedforward) - 2:
+#                 penultimate_layer = layer_input
+#             layer_input = layer(layer_input)
+#         feedforward_output = layer_input
+#
+#         # shape: (batch size, 1, output dim e.g. 2)
+#         softmax_output = self.softmax(feedforward_output)
+#
+#         forward_output = dict(
+#             feedforward_output=feedforward_output,
+#             softmax_output=softmax_output,
+#             core_hidden=penultimate_layer)
+#
+#         return forward_output
 
 
 class RecurrentModel(nn.Module):
@@ -95,10 +96,12 @@ class RecurrentModel(nn.Module):
                  model_kwargs):
 
         super(RecurrentModel, self).__init__()
+        self.model_str = model_str
+        self.model_kwargs = model_kwargs
         self.input_size = model_kwargs['input_size']
         self.output_size = model_kwargs['output_size']
 
-        # create and save core i.e. the recurrent step
+        # create and save core i.e. the recurrent operation
         self.core = self._create_core(
             model_str=model_str,
             model_kwargs=model_kwargs)
@@ -110,8 +113,6 @@ class RecurrentModel(nn.Module):
         self.recurrent_mask = masks['recurrent_mask']
         self.readout_mask = masks['readout_mask']
 
-        self.model_str = model_str
-        self.model_kwargs = model_kwargs
 
         self.description_str = create_description_str(model=self)
 
@@ -120,7 +121,7 @@ class RecurrentModel(nn.Module):
             in_features=model_kwargs['core_kwargs']['hidden_size'],
             out_features=self.output_size,
             bias=True)
-        self.softmax = nn.Softmax(dim=-1)
+        self.softmax = nn.Softmax(dim=2)
 
         # converts all weights into doubles i.e. float64
         # this prevents PyTorch from breaking when multiplying float32 * float64

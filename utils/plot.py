@@ -536,7 +536,7 @@ def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
 
 
 def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
-    
+
     fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
 
     # plot each fixed point in phase space

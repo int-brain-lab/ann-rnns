@@ -80,7 +80,7 @@ def analyze_model(model,
         model=model,
         pca=pca,
         pca_hidden_states=pca_hidden_states,
-        trial_data=run_envs_output['trial_data'],
+        session_data=run_envs_output['trial_data'],
         hidden_states=run_envs_output['hidden_states'],
         num_grad_steps=50)
 

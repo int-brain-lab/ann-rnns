@@ -25,7 +25,7 @@ def main():
         optimizer_str='sgd')
 
     envs = create_biased_choice_worlds(
-        num_envs=11,
+        num_envs=2,
         tensorboard_writer=tensorboard_writer)
 
     start_grad_step = 0
@@ -55,7 +55,6 @@ def train_model(model,
                 start_grad_step=0,
                 num_grad_steps=150,
                 tag_prefix='train/'):
-
     # sets the model in training mode.
     model.train()
 
@@ -77,16 +76,19 @@ def train_model(model,
 
         if grad_step in hook_fns:
 
+            hidden_states = np.stack(
+                [hidden_state for hidden_state in
+                 run_envs_output['session_data']['hidden_state'].values])
+
             pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
-                hidden_states=run_envs_output['hidden_states'].reshape(
-                    run_envs_output['hidden_states'].shape[0], -1))
+                hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
 
             fixed_points_by_side_by_stimuli = compute_model_fixed_points(
                 model=model,
                 pca=pca,
                 pca_hidden_states=pca_hidden_states,
-                trial_data=run_envs_output['trial_data'],
-                hidden_states=run_envs_output['hidden_states'],
+                session_data=run_envs_output['session_data'],
+                hidden_states=hidden_states,
                 num_grad_steps=50)
 
             hook_input = dict(
@@ -94,6 +96,7 @@ def train_model(model,
                 avg_reward=run_envs_output['avg_reward'].item(),
                 avg_correct_choice=run_envs_output['avg_correct_choice'].item(),
                 run_envs_output=run_envs_output,
+                hidden_states=hidden_states,
                 grad_step=grad_step,
                 model=model,
                 envs=envs,

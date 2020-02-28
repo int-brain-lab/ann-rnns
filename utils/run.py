@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from utils.models import FeedforwardModel, RecurrentModel
+from utils.models import RecurrentModel
 
 
 def create_model(model_str=None,
@@ -13,7 +13,7 @@ def create_model(model_str=None,
         model_str = 'rnn'
     if model_kwargs is None:
         model_kwargs = dict(
-            input_size=2,
+            input_size=3,
             output_size=2,
             core_kwargs=dict(
                 num_layers=1,
@@ -35,9 +35,10 @@ def create_model(model_str=None,
             model_str=model_str,
             model_kwargs=model_kwargs)
     elif model_str in {'ff'}:
-        model = FeedforwardModel(
-            model_str=model_str,
-            model_kwargs=model_kwargs)
+        raise NotImplementedError
+        # model = FeedforwardModel(
+        #     model_str=model_str,
+        #     model_kwargs=model_kwargs)
     else:
         raise NotImplementedError(f'Unknown core_str: {model_str}')
 
@@ -96,9 +97,9 @@ def run_envs(model,
         model.reset_core_hidden()  # reset core's hidden state
     step_output = envs.reset()
 
-    # step until the first env finishes
-    total_trials = 0
+    # step until any env finishes
     while not np.any(step_output['done']):
+
         total_reward = total_reward + torch.sum(step_output['reward'])  # cannot use +=
         total_loss = total_loss + torch.sum(step_output['loss'])
 
@@ -106,84 +107,32 @@ def run_envs(model,
 
         # squeeze to remove the timestep (i.e. middle dimension) for the environment
         step_output = envs.step(
-            actions=model_output['softmax_output'].squeeze(1),
+            actions=model_output['softmax_output'],
             core_hidden=model_output['core_hidden'])
 
-        total_trials += 1
+    # can use any environment because they all step synchronously
+    total_rnn_steps = envs[0].current_rnn_step
+
+    # add an indicator of which dataframe corresponds to which environment
+    for i, env in enumerate(envs):
+        env.session_data['env_num'] = i
+
+        # truncate unused rows
+        env.session_data.drop(
+            np.arange(env.current_rnn_step, len(env.session_data)),
+            inplace=True)
+
+    # combine each environment's session data
+    session_data = pd.concat([env.session_data for env in envs])
+    # session_data.to_csv('session_data.csv', index=False)
 
     # divide by total trials, batch size
-    avg_reward = total_reward / (total_trials * len(envs))
-    avg_loss = total_loss / (total_trials * len(envs))
-
-    # construct output dictionary
-    # most of the environments will be truncated early because we stop as soon
-    # as the first environment finishes. we detect the indices where this happens
-    # and exclude them
-    # unused trials are identified by the property that both the action
-    # probabilities are 0. This is due to the arrays being initialized to 0.
-    actions_probs = np.concatenate(
-        [env.actions.detach().numpy() for env in envs])
-    used_trial_indices = np.logical_and(
-        actions_probs[:, 0] != 0.,
-        actions_probs[:, 1] != 0.)
-    actions_probs = actions_probs[used_trial_indices]
-    actions_chosen = np.argmax(actions_probs, axis=1)
-
-    stimuli = np.concatenate(
-        [env.stimuli.detach().numpy() for env in envs])[used_trial_indices]
-    stimuli_sides = np.concatenate(
-        [env.stimuli_sides.detach().numpy() for env in envs])[used_trial_indices]
-    stimuli_sides_indices = (1. + stimuli_sides) / 2
-    stimuli_strengths = np.concatenate(
-        [env.stimuli_strengths.detach().numpy() for env in envs])[used_trial_indices]
-    stimuli_preferred_sides = np.concatenate(
-        [env.stimuli_preferred_sides.detach().numpy() for env in envs])[used_trial_indices]
-    rewards = np.concatenate(
-        [env.rewards.detach().numpy() for env in envs])[used_trial_indices]
-    losses = np.concatenate(
-        [env.losses.detach().numpy() for env in envs])[used_trial_indices]
-    stimuli_block_number = np.concatenate(
-        [env.stimuli_block_number for env in envs])[used_trial_indices]
-    trial_num_within_block = np.concatenate(
-        [env.trial_num_within_block for env in envs])[used_trial_indices]
-
-    actions_correct = np.equal(actions_chosen, stimuli_sides_indices)
-    avg_correct_choice = np.mean(actions_correct)
-
-    model_correct_action_probs = actions_probs[
-        np.arange(len(actions_probs)),
-        (stimuli_sides + 1) // 2]
-
-    model_hidden_states = np.concatenate([
-        np.stack(env.model_hidden_states)
-        for env in envs])
-
-    env_num = np.concatenate([
-        np.full(fill_value=i, shape=env.total_num_trials)
-        for i, env in enumerate(envs)])[used_trial_indices]
-
-    trial_data = pd.DataFrame(dict(
-        env_num=env_num,
-        stimuli=stimuli,
-        stimuli_sides=stimuli_sides,
-        stimuli_strengths=stimuli_strengths,
-        stimuli_preferred_sides=stimuli_preferred_sides,
-        stimuli_block_number=stimuli_block_number,
-        rewards=rewards,
-        losses=losses,
-        actions_chosen=actions_chosen,
-        actions_correct=actions_correct,
-        model_left_action_probs=actions_probs[:, 0],
-        model_right_action_probs=actions_probs[:, 1],
-        model_correct_action_probs=model_correct_action_probs,
-        trial_num_within_block=trial_num_within_block,
-    ))
+    avg_reward = total_reward / (total_rnn_steps * len(envs))
+    avg_loss = total_loss / (total_rnn_steps * len(envs))
 
     run_envs_output = dict(
-        trial_data=trial_data,
-        hidden_states=model_hidden_states,
+        session_data=session_data,
         avg_reward=avg_reward,
-        avg_correct_choice=avg_correct_choice,
         avg_loss=avg_loss,
     )
 

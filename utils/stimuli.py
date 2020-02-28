@@ -54,40 +54,33 @@ class VectorStimulusCreator(StimulusCreator):
             observation_space=observation_space)
 
     def create_block_stimuli(self,
-                             block_num_trials,
+                             num_trials,
                              block_side_bias_probabilities):
 
-        sampled_sides = np.random.choice(
-            ['left', 'right'],
+        # sample standard normal noise for both left and right stimuli
+        sampled_stimuli = np.random.normal(
+            loc=0,
+            scale=1,
+            size=(num_trials, 2))
+
+        # now, determine which sides will have signal
+        # -1 is left, +1 is right
+        # these values also control the means of the distributions
+        signal_sides = np.random.choice(
+            [-1, 1],
             p=block_side_bias_probabilities,
-            size=block_num_trials)
+            size=num_trials)
 
-        # convert left to -1, right to 1
-        # these values control the means of the distributions
-        sampled_sides = np.where(sampled_sides == 'left', -1, 1)
+        signal = np.random.normal(
+            loc=signal_sides,
+            scale=np.ones_like(signal_sides))
 
-        sampled_strengths = np.random.choice(
-            self.stimulus_strengths,
-            p=self.stimulus_strength_probs,
-            size=block_num_trials)
-
-        std_dev = np.sqrt(1. / sampled_strengths)
-        # sampled_noise = np.random.normal(
-        #     loc=np.zeros_like(std_dev),
-        #     scale=std_dev)
-        sampled_noise = truncnorm.rvs(
-            a=-1.5,
-            b=1.5,
-            loc=np.zeros_like(std_dev),
-            scale=std_dev)
-
-        # move means of sampled noise
-        sampled_stimuli = sampled_sides + sampled_noise
+        # add signals to noise
+        sampled_stimuli[np.arange(len(sampled_stimuli)), (signal_sides+1) // 2] += signal
 
         output = dict(
-            sampled_stimuli=sampled_stimuli,
-            sampled_sides=sampled_sides,
-            sampled_strengths=sampled_strengths)
+            stimuli=sampled_stimuli,
+            sampled_sides=signal_sides)
 
         return output
 

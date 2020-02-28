@@ -166,9 +166,7 @@ def compute_projected_hidden_state_trajectory_controlled(model,
 
     envs = create_custom_worlds(
         num_envs=1,
-        num_blocks=12,
-        left_bias_probs=(1.0, 0.0),
-        right_bias_probs=(0.0, 1.0),
+        blocks_per_session=12,
         tensorboard_writer=None)
     run_envs_output = run_envs(
         model=model,
@@ -199,7 +197,7 @@ def compute_projected_hidden_states_pca(hidden_states):
 def compute_model_fixed_points(model,
                                pca,
                                pca_hidden_states,
-                               trial_data,
+                               session_data,
                                hidden_states,
                                num_grad_steps=100):
 
@@ -211,12 +209,12 @@ def compute_model_fixed_points(model,
     # identify non-first block indices
     possible_stimuli = np.linspace(-1.5, 1.5, 3)
     fixed_points_by_side_by_stimuli = {}
-    for side, trial_data_preferred_side in trial_data.groupby('stimuli_preferred_sides'):
+    for side, session_data_preferred_side in session_data.groupby('stimuli_preferred_sides'):
         fixed_points_by_side_by_stimuli[side] = dict()
 
         for possible_stimulus in possible_stimuli:
 
-            non_first_block_indices = trial_data_preferred_side.index.to_numpy()
+            non_first_block_indices = session_data_preferred_side.index.to_numpy()
 
             random_subset_indices = non_first_block_indices
 
@@ -226,7 +224,7 @@ def compute_model_fixed_points(model,
             final_sampled_hidden_states = initial_sampled_hidden_states.clone().requires_grad_(True)
 
             rewards = torch.from_numpy(
-                trial_data.iloc[random_subset_indices]['rewards'].to_numpy()).reshape(-1, 1)
+                session_data.iloc[random_subset_indices]['rewards'].to_numpy()).reshape(-1, 1)
 
             stimuli = torch.zeros(
                 size=(len(random_subset_indices), 1, 1)).fill_(possible_stimulus)
