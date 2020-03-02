@@ -7,13 +7,12 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.analysis import compute_model_fixed_points, compute_projected_hidden_states_pca
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_train
-from utils.run import create_model, create_optimizer, run_envs
+from utils.run import create_model, create_optimizer, run_envs, set_seed
 
 
 def main():
     seed = 1
-    torch.manual_seed(seed)
-    np.random.seed(seed=seed)
+    set_seed(seed=seed)
 
     model = create_model()
 
@@ -38,6 +37,7 @@ def main():
         envs=envs,
         optimizer=optimizer,
         hook_fns=hook_fns,
+        seed=seed,
         tensorboard_writer=tensorboard_writer,
         start_grad_step=start_grad_step,
         num_grad_steps=num_grad_steps)
@@ -49,6 +49,7 @@ def train_model(model,
                 envs,
                 optimizer,
                 hook_fns,
+                seed,
                 tensorboard_writer,
                 start_grad_step=0,
                 num_grad_steps=150,
@@ -105,7 +106,8 @@ def train_model(model,
                 pca=pca,
                 # fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
                 tensorboard_writer=tensorboard_writer,
-                tag_prefix=tag_prefix)
+                tag_prefix=tag_prefix,
+                seed=seed)
 
             for hook_fn in hook_fns[grad_step]:
                 hook_fn(hook_input)

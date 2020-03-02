@@ -331,8 +331,10 @@ class RecurrentModel(nn.Module):
 
 
 def create_description_str(model):
-    description_str = '{}'.format(model.model_str)
+    description_str = ''  # '{}'.format(model.model_str)
     for key, value in model.model_kwargs.items():
+        if key == 'input_size' or key == 'output_size':
+            continue
         if isinstance(value, dict):
             for nkey, nvalue in value.items():
                 description_str += ', {}={}'.format(str(nkey), str(nvalue))

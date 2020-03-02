@@ -143,3 +143,8 @@ def run_envs(model,
 
 def save_train_output(test_or_train_output):
     raise NotImplementedError
+
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)

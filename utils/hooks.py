@@ -118,6 +118,7 @@ def hook_log_args(hook_input):
         stimulus_strengths_probs=hook_input['envs'][0].stimulus_creator.stimulus_strength_probs,
         stimulus_side_bias_probs=hook_input['envs'][0].block_side_probs,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty,
+        seed=hook_input['seed'],
     )
 
     notes_file = os.path.join(
