@@ -43,8 +43,8 @@ class VecEnv(object):
 
     # Call this at the end of training:
     def close(self):
-        for env in self.envs:
-            env.close()
+        for i, env in enumerate(self.envs):
+            env.close(env_index=i)
 
 
 def _flatten_list_of_dicts(list_of_dicts):

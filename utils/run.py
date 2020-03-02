@@ -113,27 +113,29 @@ def run_envs(model,
     # can use any environment because they all step synchronously
     total_rnn_steps = envs[0].current_rnn_step
 
-    # add an indicator of which dataframe corresponds to which environment
-    for i, env in enumerate(envs):
-        env.session_data['env_num'] = i
-
-        # truncate unused rows
-        env.session_data.drop(
-            np.arange(env.current_rnn_step, len(env.session_data)),
-            inplace=True)
+    envs.close()
 
     # combine each environment's session data
     session_data = pd.concat([env.session_data for env in envs])
+    # check that no nan rows remain
+    rows_containing_nan = session_data.isnull().any(axis=1)
+    assert rows_containing_nan.sum() == 0
+
+    # write CSV to disk for manual inspection, if curious
     # session_data.to_csv('session_data.csv', index=False)
 
     # divide by total trials, batch size
     avg_reward = total_reward / (total_rnn_steps * len(envs))
     avg_loss = total_loss / (total_rnn_steps * len(envs))
 
+    avg_rnn_steps_per_trial = session_data.groupby([
+        'env_index', 'block_index', 'trial_index']).size().mean()
+
     run_envs_output = dict(
         session_data=session_data,
         avg_reward=avg_reward,
         avg_loss=avg_loss,
+        avg_rnn_steps_per_trial=avg_rnn_steps_per_trial
     )
 
     return run_envs_output

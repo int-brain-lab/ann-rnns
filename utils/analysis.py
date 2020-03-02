@@ -100,7 +100,7 @@ def compute_jacobians_by_side_by_stimuli(model,
 
 
 def compute_projected_hidden_state_vector_field(model,
-                                                trial_data,
+                                                session_data,
                                                 hidden_states):
 
     # project all hidden states using pca
@@ -112,7 +112,7 @@ def compute_projected_hidden_state_vector_field(model,
     possible_stimuli = np.linspace(-1.5, 1.5, 3)
 
     vector_fields_by_side_by_stimuli = {}
-    for side, trial_data_preferred_side in trial_data.groupby('stimuli_preferred_sides'):
+    for side, trial_data_preferred_side in session_data.groupby('stimuli_preferred_sides'):
         vector_fields_by_side_by_stimuli[side] = dict()
 
         for possible_stimulus in possible_stimuli:
@@ -130,7 +130,7 @@ def compute_projected_hidden_state_vector_field(model,
             projected_sampled_hidden_states = projected_hidden_states[random_subset_indices]
 
             rewards = torch.from_numpy(
-                trial_data.iloc[random_subset_indices]['rewards'].to_numpy()).reshape(-1, 1)
+                session_data.iloc[random_subset_indices]['rewards'].to_numpy()).reshape(-1, 1)
 
             stimuli = torch.zeros(
                 size=(len(random_subset_indices), 1, 1)).fill_(possible_stimulus)
@@ -175,7 +175,7 @@ def compute_projected_hidden_state_trajectory_controlled(model,
     projected_hidden_states = pca.transform(hidden_states.reshape(hidden_states.shape[0], -1))
 
     trajectory_controlled_output = dict(
-        trial_data=run_envs_output['trial_data'],
+        session_data=run_envs_output['session_data'],
         hidden_states=hidden_states,
         projected_hidden_states=projected_hidden_states,
     )
@@ -209,12 +209,12 @@ def compute_model_fixed_points(model,
     # identify non-first block indices
     possible_stimuli = np.linspace(-1.5, 1.5, 3)
     fixed_points_by_side_by_stimuli = {}
-    for side, session_data_preferred_side in session_data.groupby('stimuli_preferred_sides'):
+    for side, session_data_block_side in session_data.groupby('block_stimulus_side'):
         fixed_points_by_side_by_stimuli[side] = dict()
 
         for possible_stimulus in possible_stimuli:
 
-            non_first_block_indices = session_data_preferred_side.index.to_numpy()
+            non_first_block_indices = session_data_block_side.index.to_numpy()
 
             random_subset_indices = non_first_block_indices
 
@@ -224,7 +224,7 @@ def compute_model_fixed_points(model,
             final_sampled_hidden_states = initial_sampled_hidden_states.clone().requires_grad_(True)
 
             rewards = torch.from_numpy(
-                session_data.iloc[random_subset_indices]['rewards'].to_numpy()).reshape(-1, 1)
+                session_data.iloc[random_subset_indices]['reward'].to_numpy()).reshape(-1, 1)
 
             stimuli = torch.zeros(
                 size=(len(random_subset_indices), 1, 1)).fill_(possible_stimulus)
@@ -269,15 +269,15 @@ def compute_model_fixed_points(model,
     return fixed_points_by_side_by_stimuli
 
 
-def compute_psytrack_fit(trial_data):
+def compute_psytrack_fit(session_data):
 
     # need to add 1 because psytrack expects 1s & 2s, not 0s & 1s
-    psytrack_model_choice = trial_data['actions_chosen'].values[1:] + 1
+    psytrack_model_choice = session_data['actions_chosen'].values[1:] + 1
     if np.var(psytrack_model_choice) < 0.025:
         print('Model made only one action')
         return
-    psytrack_stimuli = trial_data['stimuli'].values[1:].reshape(-1, 1)
-    psytrack_rewards = trial_data['rewards'].values[:-1].reshape(-1, 1)
+    psytrack_stimuli = session_data['stimuli'].values[1:].reshape(-1, 1)
+    psytrack_rewards = session_data['rewards'].values[:-1].reshape(-1, 1)
 
     # psytrack inputs need to be shaped (N, M), where N is number of trials and
     # M is arbitrary integer

@@ -43,9 +43,8 @@ def create_hook_fns_dict(hook_fns_frequencies,
 def create_hook_fns_analyze(start_grad_step):
 
     hook_fns_frequencies = [
-        (0, hook_write_avg_correct_choice),
         (0, hook_write_scalars),
-        (0, utils.plot.hook_plot_avg_model_prob_by_trial_num_within_block),
+        (0, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
         (0, utils.plot.hook_plot_psychometric_curves),
         (0, utils.plot.hook_plot_hidden_state_correlations),
         (0, utils.plot.hook_plot_hidden_state_dimensionality),
@@ -78,20 +77,20 @@ def create_hook_fns_train(start_grad_step,
         (0, hook_log_args),
         (5, hook_print_model_progress),
         (5, hook_write_scalars),
-        # (10, hook_write_pr_curve),
-        (10, utils.plot.hook_plot_avg_model_prob_by_trial_num_within_block),
-        (10, utils.plot.hook_plot_psychometric_curves),
-        (10, utils.plot.hook_plot_model_weights),
-        (10, utils.plot.hook_plot_model_weights_gradients),
-        (10, utils.plot.hook_plot_hidden_state_correlations),
-        (10, utils.plot.hook_plot_hidden_state_dimensionality),
-        (10, utils.plot.hook_plot_hidden_state_projected_phase_space),
-        (10, utils.plot.hook_plot_hidden_state_projected_vector_fields),
-        (10, utils.plot.hook_plot_hidden_state_projected_trajectories),
-        (10, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
-        (10, utils.plot.hook_plot_hidden_state_projected_fixed_points),
-        (10, utils.plot.hook_plot_psytrack_fit),
-        (10, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
+        (5, utils.plot.hook_plot_within_trial_data),
+        (5, utils.plot.hook_plot_hidden_state_dimensionality),
+        (10, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
+        # (10, utils.plot.hook_plot_psychometric_curves),
+        # (10, utils.plot.hook_plot_model_weights),
+        # (10, utils.plot.hook_plot_model_weights_gradients),
+        # (10, utils.plot.hook_plot_hidden_state_correlations),
+        # (10, utils.plot.hook_plot_hidden_state_projected_phase_space),
+        # (10, utils.plot.hook_plot_hidden_state_projected_vector_fields),
+        # (10, utils.plot.hook_plot_hidden_state_projected_trajectories),
+        # (10, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
+        # (10, utils.plot.hook_plot_hidden_state_projected_fixed_points),
+        # (10, utils.plot.hook_plot_psytrack_fit),
+        # (10, utils.plot.hook_pl1ot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
         (1000, hook_save_model),
     ]
 
@@ -109,10 +108,16 @@ def hook_log_args(hook_input):
         model_str=hook_input['model'].model_str,
         model_kwargs=hook_input['model'].model_kwargs,
         batch_size=len(hook_input['envs']),
-        block_duration_param=hook_input['envs'][0].block_duration_param,
+        env_loss_fn_str=hook_input['envs'][0].loss_fn_str,
+        blocks_per_session=hook_input['envs'][0].blocks_per_session,
+        trials_per_block_param=hook_input['envs'][0].trials_per_block_param,
+        min_trials_per_block=hook_input['envs'][0].min_trials_per_block,
+        max_trials_per_block=hook_input['envs'][0].max_trials_per_block,
+        max_rnn_steps_per_trial=hook_input['envs'][0].max_rnn_steps_per_trial,
         stimulus_strengths=hook_input['envs'][0].stimulus_creator.stimulus_strengths,
         stimulus_strengths_probs=hook_input['envs'][0].stimulus_creator.stimulus_strength_probs,
-        stimulus_side_bias_probs=hook_input['envs'][0].side_bias_probs,
+        stimulus_side_bias_probs=hook_input['envs'][0].block_side_probs,
+        time_delay_penalty=hook_input['envs'][0].time_delay_penalty,
     )
 
     notes_file = os.path.join(
@@ -124,11 +129,11 @@ def hook_log_args(hook_input):
 
 
 def hook_print_model_progress(hook_input):
-    print('Grad Step: {:5d}\tLoss: {:6.3f}\tReward: {:6.3f}\tFrac Correct Choice: {:6.3f}'.format(
+    print('Grad Step: {:5d}\tAvg Loss: {:6.3f}\tAvg Reward: {:6.3f}\tAvg RNN Steps/Trial: {:6.3f}'.format(
         hook_input['grad_step'],
         hook_input['avg_loss'],
         hook_input['avg_reward'],
-        hook_input['avg_correct_choice']))
+        hook_input['avg_rnn_steps_per_trial']))
 
 
 def hook_save_model(hook_input):
@@ -170,8 +175,8 @@ def hook_write_scalars(hook_input):
         global_step=hook_input['grad_step'])
 
     hook_input['tensorboard_writer'].add_scalar(
-        tag=hook_input['tag_prefix'] + 'avg_correct_choice_per_grad_step',
-        scalar_value=hook_input['avg_correct_choice'],
+        tag=hook_input['tag_prefix'] + 'rnn_steps_per_trial',
+        scalar_value=hook_input['avg_rnn_steps_per_trial'],
         global_step=hook_input['grad_step'])
 
 

@@ -60,7 +60,7 @@ class VectorStimulusCreator(StimulusCreator):
         # sample standard normal noise for both left and right stimuli
         sampled_stimuli = np.random.normal(
             loc=0,
-            scale=1,
+            scale=0.1,
             size=(num_trials, 2))
 
         # now, determine which sides will have signal
@@ -73,7 +73,7 @@ class VectorStimulusCreator(StimulusCreator):
 
         signal = np.random.normal(
             loc=signal_sides,
-            scale=np.ones_like(signal_sides))
+            scale=0.1*np.ones_like(signal_sides))
 
         # add signals to noise
         sampled_stimuli[np.arange(len(sampled_stimuli)), (signal_sides+1) // 2] += signal

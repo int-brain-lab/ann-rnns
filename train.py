@@ -24,12 +24,10 @@ def main():
         model=model,
         optimizer_str='sgd')
 
-    envs = create_biased_choice_worlds(
-        num_envs=2,
-        tensorboard_writer=tensorboard_writer)
+    envs = create_biased_choice_worlds()
 
     start_grad_step = 0
-    num_grad_steps = 10001
+    num_grad_steps = 25001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
@@ -83,19 +81,19 @@ def train_model(model,
             pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
                 hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
 
-            fixed_points_by_side_by_stimuli = compute_model_fixed_points(
-                model=model,
-                pca=pca,
-                pca_hidden_states=pca_hidden_states,
-                session_data=run_envs_output['session_data'],
-                hidden_states=hidden_states,
-                num_grad_steps=50)
+            # fixed_points_by_side_by_stimuli = compute_model_fixed_points(
+            #     model=model,
+            #     pca=pca,
+            #     pca_hidden_states=pca_hidden_states,
+            #     session_data=run_envs_output['session_data'],
+            #     hidden_states=hidden_states,
+            #     num_grad_steps=50)
 
             hook_input = dict(
                 avg_loss=run_envs_output['avg_loss'].item(),
                 avg_reward=run_envs_output['avg_reward'].item(),
-                avg_correct_choice=run_envs_output['avg_correct_choice'].item(),
-                run_envs_output=run_envs_output,
+                avg_rnn_steps_per_trial=run_envs_output['avg_rnn_steps_per_trial'],
+                session_data=run_envs_output['session_data'],
                 hidden_states=hidden_states,
                 grad_step=grad_step,
                 model=model,
@@ -105,7 +103,7 @@ def train_model(model,
                 pca_xrange=pca_xrange,
                 pca_yrange=pca_yrange,
                 pca=pca,
-                fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
+                # fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
                 tensorboard_writer=tensorboard_writer,
                 tag_prefix=tag_prefix)
 

@@ -20,7 +20,8 @@ class IBLSession(gym.Env):
                  trials_per_block_param=1 / 60,
                  min_trials_per_block=60,
                  max_trials_per_block=100,
-                 max_rnn_steps_per_trial=10):
+                 max_rnn_steps_per_trial=10,
+                 time_delay_penalty=0.05):
 
         """
 
@@ -48,8 +49,13 @@ class IBLSession(gym.Env):
         self.action_space = spaces.Discrete(2)  # left or right
         self.observation_space = stimulus_creator.observation_space
         self.reward_range = (0, 1)
-        self.loss_fn = self.create_loss_fn(loss_fn_str=loss_fn_str)
-        self.reward_fn = self.create_reward_fn()
+        self.loss_fn_str = loss_fn_str
+        self.time_delay_penalty = time_delay_penalty
+        self.loss_fn = self.create_loss_fn(
+            loss_fn_str=loss_fn_str,
+            time_delay_penalty=time_delay_penalty)
+        self.reward_fn = self.create_reward_fn(
+            time_delay_penalty=time_delay_penalty)
 
         # to (re)initialize the following variables, call self.reset()
         self.num_trials_per_block = None
@@ -74,7 +80,7 @@ class IBLSession(gym.Env):
         assert hasattr(stimulus_creator, 'observation_space')
 
     @staticmethod
-    def create_loss_fn(loss_fn_str):
+    def create_loss_fn(loss_fn_str, time_delay_penalty):
         """
 
         :param loss_fn_str: str specifying the desired loss function
@@ -84,13 +90,20 @@ class IBLSession(gym.Env):
         """
 
         if loss_fn_str == 'nll':
-            loss_fn = NLLLoss()
+            nllloss = NLLLoss()
+
+            def loss_fn(target, input):
+                # TODO: adding time delay penalty is currently pointless
+                loss = nllloss(target=target, input=input) + time_delay_penalty
+                return loss
+
         else:
             raise NotImplementedError
+
         return loss_fn
 
     @staticmethod
-    def create_reward_fn():
+    def create_reward_fn(time_delay_penalty):
         """
         :return: reward_fn:   must have two keyword arguments, target and input
                     target.shape should be (batch size = 1,)
@@ -98,16 +111,25 @@ class IBLSession(gym.Env):
         """
 
         def reward_fn(target, input):
-            # TODO: add negative reward for low confidence action
-            reward = target == torch.max(input, dim=1)[1]  # max returns (value, index)
-            # add time delay penalty
-            reward = reward.double() - 0.05
-            return reward.double()
+            # max returns (value, index)
+            max_prob_idx = torch.max(input, dim=1)[1]
+
+            # for an action to be rewarded, the model must have made the correct choice
+            reward = (target == max_prob_idx).double()
+
+            return reward
 
         return reward_fn
 
-    def close(self):
-        pass
+    def close(self, env_index):
+
+        # add an indicator of which dataframe corresponds to which environment
+        self.session_data['env_index'] = env_index
+
+        # truncate unused rows
+        self.session_data.drop(
+            np.arange(self.current_rnn_step, len(self.session_data)),
+            inplace=True)
 
     def reset(self):
         """
@@ -168,7 +190,7 @@ class IBLSession(gym.Env):
             stimuli.append(stimulus_creator_output['stimuli'])
             trial_stimulus_side.append(stimulus_creator_output['sampled_sides'])
             block_stimulus_side.append(-1 if current_block_side == 0 else 1)
-            current_block_side = 1 if current_block_side == 0 else 1
+            current_block_side = 1 if current_block_side == 0 else 0
 
         # flatten each list of numpy arrays and convert to torch tensors
         self.stimuli = torch.from_numpy(np.concatenate(stimuli))
@@ -239,13 +261,15 @@ class IBLSession(gym.Env):
         # advance current rnn step within trial.
         self.current_rnn_step_within_trial += 1
 
-        # move to next trial
-        if self.current_rnn_step_within_trial == self.max_rnn_steps_per_trial:
+        # max returns (value, index)
+        max_prob = torch.max(model_softmax_output, dim=1)[0]
+        # move to next trial if action made or if maxed out number of rnn_steps within trial
+        if max_prob.item() > 0.9 or self.current_rnn_step_within_trial == self.max_rnn_steps_per_trial:
 
             self.current_rnn_step_within_trial = 0
             self.current_trial_within_block += 1
 
-            # move to next block
+            # move to next block if finished trials within block
             if self.current_trial_within_block == self.num_trials_per_block[self.current_block_within_session]:
                 self.current_block_within_session += 1
                 self.current_rnn_step_within_trial = 0
@@ -294,8 +318,7 @@ def create_training_choice_world(batch_size):
     return training_choice_worlds
 
 
-def create_biased_choice_worlds(tensorboard_writer,
-                                num_envs=7):
+def create_biased_choice_worlds(num_envs=11):
     """
     "biased choice world during which visual stimuli have to be actively moved
     by the mouse; left and right stimuli are presented with different probability
@@ -303,7 +326,9 @@ def create_biased_choice_worlds(tensorboard_writer,
     """
 
     kwargs = dict(
-        blocks_per_session=2,
+        blocks_per_session=3,
+        min_trials_per_block=10,
+        max_trials_per_block=30,
         stimulus_creator=VectorStimulusCreator())
     envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
