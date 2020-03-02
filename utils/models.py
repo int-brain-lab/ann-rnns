@@ -97,6 +97,7 @@ class RecurrentModel(nn.Module):
 
         super(RecurrentModel, self).__init__()
         self.model_str = model_str
+        assert model_str in {'rnn', 'lstm', 'gru'}
         self.model_kwargs = model_kwargs
         self.input_size = model_kwargs['input_size']
         self.output_size = model_kwargs['output_size']
@@ -198,14 +199,22 @@ class RecurrentModel(nn.Module):
                 elif mask_str == 'recurrent_mask':
                     model_kwargs['connectivity_kwargs'][mask_str] = 'none'
 
+        # determine how much to inflate
+        if self.model_str == 'rnn':
+            size_prefactor = 1
+        elif self.model_str == 'gru':
+            size_prefactor = 3
+        elif self.model_str == 'lstm':
+            size_prefactor = 4
+
         # create input-to-hidden, hidden-to-hidden, hidden-to-readout masks
         masks = dict()
         for mask_str, mask_type_str in model_kwargs['connectivity_kwargs'].items():
 
             if mask_str == 'input_mask':
-                mask_shape = (hidden_size, self.input_size)
+                mask_shape = (size_prefactor * hidden_size, self.input_size)
             elif mask_str == 'recurrent_mask':
-                mask_shape = (hidden_size, hidden_size)
+                mask_shape = (size_prefactor * hidden_size, hidden_size)
             elif mask_str == 'readout_mask':
                 mask_shape = (self.output_size, hidden_size)
             else:
@@ -246,7 +255,7 @@ class RecurrentModel(nn.Module):
             graph = networkx.watts_strogatz_graph(
                 n=output_shape,
                 k=int(0.2 * output_shape),
-                p=0.05)
+                p=0.1)
             connectivity_mask = networkx.to_numpy_matrix(G=graph)
         elif mask_type_str.endswith('_block_diag'):
             # extract leading integer
@@ -321,17 +330,21 @@ class RecurrentModel(nn.Module):
         self.readout.weight.data[:] = torch.mul(
             self.readout.weight, self.readout_mask)
 
-        if self.model_str == 'rnn':
-            self.core.weight_ih_l0.data[:] = torch.mul(
-                self.core.weight_ih_l0, self.input_mask)
-            self.core.weight_hh_l0.data[:] = torch.mul(
-                self.core.weight_hh_l0, self.recurrent_mask)
-        else:
-            raise NotImplementedError('Implement masking for non-RNN model')
+        # if self.model_str == 'rnn':
+        self.core.weight_ih_l0.data[:] = torch.mul(
+            self.core.weight_ih_l0, self.input_mask)
+        self.core.weight_hh_l0.data[:] = torch.mul(
+            self.core.weight_hh_l0, self.recurrent_mask)
+        # elif self.model_str == 'lstm':
+        #     raise NotImplementedError('LSTM masking not yet implemented')
+        # elif self.model_str == 'gru':
+        #     raise NotImplementedError('GRU masking not yet implemented')
+        # else:
+        #     raise NotImplementedError('Unrecognized Model String')
 
 
 def create_description_str(model):
-    description_str = ''  # '{}'.format(model.model_str)
+    description_str = '{}'.format(model.model_str)
     for key, value in model.model_kwargs.items():
         if key == 'input_size' or key == 'output_size':
             continue

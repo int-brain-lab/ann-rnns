@@ -597,13 +597,10 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
 
 def hook_plot_model_weights(hook_input):
     weights = dict(
+        input=hook_input['model'].core.weight_ih_l0.data.numpy(),
+        recurrent=hook_input['model'].core.weight_hh_l0.data.numpy(),
         readout=hook_input['model'].readout.weight.data.numpy()
     )
-    if hook_input['model'].model_str == 'rnn':
-        weights['input'] = hook_input['model'].core.weight_ih_l0.data.numpy()
-        weights['recurrent'] = hook_input['model'].core.weight_hh_l0.data.numpy()
-    else:
-        raise NotImplementedError
 
     # compute min, max
     vmin, vmax = np.inf, -np.inf
