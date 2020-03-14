@@ -10,7 +10,7 @@ def create_model(model_str=None,
 
     # defaults
     if model_str is None:
-        model_str = 'rnn'
+        model_str = 'lstm'
     if model_kwargs is None:
         model_kwargs = dict(
             input_size=3,
@@ -110,10 +110,10 @@ def run_envs(model,
             actions=model_output['softmax_output'],
             core_hidden=model_output['core_hidden'])
 
-    # can use any environment because they all step synchronously
-    total_rnn_steps = envs[0].current_rnn_step
-
     envs.close()
+
+    # can use any environment because they all step synchronously
+    total_rnn_steps = envs[0].current_rnn_step_within_session
 
     # combine each environment's session data
     session_data = pd.concat([env.session_data for env in envs])
@@ -129,7 +129,7 @@ def run_envs(model,
     avg_loss = total_loss / (total_rnn_steps * len(envs))
 
     avg_rnn_steps_per_trial = session_data.groupby([
-        'env_index', 'block_index', 'trial_index']).size().mean()
+        'session_index', 'block_index', 'trial_index']).size().mean()
 
     run_envs_output = dict(
         session_data=session_data,
