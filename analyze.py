@@ -1,18 +1,18 @@
 import numpy as np
 import os
-import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.analysis import compute_model_fixed_points, compute_projected_hidden_states_pca
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_analyze
-from utils.run import load_checkpoint, run_envs
+from utils.run import load_checkpoint, run_envs, set_seed
 
 
 def main():
+    seed = 1
+    set_seed(seed=seed)
 
-    run_dir = 'rnn, num_layers=1, hidden_size=100, param_init=default_2020-02-24 09:32:50.187688'
-    # run_dir = 'rnn, num_layers=1, hidden_size=10, param_init=eye_2020-02-05 13:56:15.813806'
+    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-12 17:35:22.727812'
     train_log_dir = os.path.join('runs', run_dir)
 
     # collect last checkpoint in the log directory
@@ -23,9 +23,7 @@ def main():
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
 
-    envs = create_biased_choice_worlds(
-        num_envs=11,
-        tensorboard_writer=tensorboard_writer)
+    envs = create_biased_choice_worlds(num_envs=11)
 
     model, optimizer, grad_step = load_checkpoint(
         checkpoint_path=checkpoint_paths[0],
@@ -39,6 +37,7 @@ def main():
         envs=envs,
         optimizer=optimizer,
         hook_fns=hook_fns,
+        seed=seed,
         tensorboard_writer=tensorboard_writer,
         start_grad_step=grad_step,
         num_grad_steps=0,
@@ -51,6 +50,7 @@ def analyze_model(model,
                   envs,
                   optimizer,
                   hook_fns,
+                  seed,
                   tensorboard_writer,
                   start_grad_step,
                   num_grad_steps=0,
@@ -59,35 +59,36 @@ def analyze_model(model,
     if num_grad_steps != 0:
         raise ValueError('Number of gradient steps must be zero!')
 
-    # sets the model in testing mode
-    # model.eval()
-
-    avg_reward, avg_correct_choice, run_envs_output = run_envs(
+    run_envs_output = run_envs(
         model=model,
         envs=envs)
-    loss = -avg_reward
 
     analyze_model_output = dict(
         global_step=start_grad_step,
         run_envs_output=run_envs_output
     )
 
+    hidden_states = np.stack(
+        [hidden_state for hidden_state in
+         run_envs_output['session_data']['hidden_state'].values])
+
     pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
-        hidden_states=run_envs_output['hidden_states'].reshape(
-            run_envs_output['hidden_states'].shape[0], -1))
+        hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
 
     fixed_points_by_side_by_stimuli = compute_model_fixed_points(
         model=model,
         pca=pca,
         pca_hidden_states=pca_hidden_states,
-        session_data=run_envs_output['trial_data'],
-        hidden_states=run_envs_output['hidden_states'],
+        session_data=run_envs_output['session_data'],
+        hidden_states=hidden_states,
         num_grad_steps=50)
 
     hook_input = dict(
-        loss=loss.item(),
-        avg_correct_choice=avg_correct_choice.item(),
-        run_envs_output=run_envs_output,
+        avg_loss=run_envs_output['avg_loss'].item(),
+        avg_reward=run_envs_output['avg_reward'].item(),
+        avg_rnn_steps_per_trial=run_envs_output['avg_rnn_steps_per_trial'],
+        session_data=run_envs_output['session_data'],
+        hidden_states=hidden_states,
         grad_step=start_grad_step,
         model=model,
         envs=envs,
@@ -96,9 +97,10 @@ def analyze_model(model,
         pca_xrange=pca_xrange,
         pca_yrange=pca_yrange,
         pca=pca,
-        fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
+        # fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
         tensorboard_writer=tensorboard_writer,
-        tag_prefix=tag_prefix)
+        tag_prefix=tag_prefix,
+        seed=seed)
 
     for hook_fn in hook_fns[start_grad_step]:
         hook_fn(hook_input)
@@ -107,6 +109,4 @@ def analyze_model(model,
 
 
 if __name__ == '__main__':
-    torch.manual_seed(2)
-    np.random.seed(2)
     main()

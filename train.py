@@ -1,7 +1,6 @@
 from datetime import datetime
 import numpy as np
 import os
-import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.analysis import compute_model_fixed_points, compute_projected_hidden_states_pca
@@ -23,10 +22,10 @@ def main():
         model=model,
         optimizer_str='sgd')
 
-    envs = create_biased_choice_worlds()
+    envs = create_biased_choice_worlds(num_envs=1)
 
     start_grad_step = 0
-    num_grad_steps = 25001
+    num_grad_steps = 10001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
@@ -82,13 +81,13 @@ def train_model(model,
             pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
                 hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
 
-            # fixed_points_by_side_by_stimuli = compute_model_fixed_points(
-            #     model=model,
-            #     pca=pca,
-            #     pca_hidden_states=pca_hidden_states,
-            #     session_data=run_envs_output['session_data'],
-            #     hidden_states=hidden_states,
-            #     num_grad_steps=50)
+            fixed_points_by_side_by_stimuli = compute_model_fixed_points(
+                model=model,
+                pca=pca,
+                pca_hidden_states=pca_hidden_states,
+                session_data=run_envs_output['session_data'],
+                hidden_states=hidden_states,
+                num_grad_steps=50)
 
             hook_input = dict(
                 avg_loss=run_envs_output['avg_loss'].item(),
@@ -110,7 +109,10 @@ def train_model(model,
                 seed=seed)
 
             for hook_fn in hook_fns[grad_step]:
+                # try:
                 hook_fn(hook_input)
+                # except Exception as e:
+                #     print(e)
 
     train_model_output = dict(
         grad_step=grad_step,

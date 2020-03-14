@@ -99,68 +99,6 @@ def compute_jacobians_by_side_by_stimuli(model,
     return jacobians_by_side_by_stimuli
 
 
-def compute_projected_hidden_state_vector_field(model,
-                                                session_data,
-                                                hidden_states):
-
-    # project all hidden states using pca
-    # reshape to (num trials, num layers * hidden dimension)
-    projected_hidden_states, xrange, yrange, pca = compute_projected_hidden_states_pca(
-        hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
-
-    # identify non-first block indices
-    possible_stimuli = np.linspace(-1.5, 1.5, 3)
-
-    vector_fields_by_side_by_stimuli = {}
-    for side, trial_data_preferred_side in session_data.groupby('stimuli_preferred_sides'):
-        vector_fields_by_side_by_stimuli[side] = dict()
-
-        for possible_stimulus in possible_stimuli:
-
-            non_first_block_indices = trial_data_preferred_side.index[
-                trial_data_preferred_side['stimuli_block_number'] != 1].to_numpy()
-
-            # sample subset of indices
-            random_subset_indices = np.random.choice(
-                non_first_block_indices,
-                replace=False,
-                size=150)
-
-            sampled_hidden_states = hidden_states[random_subset_indices]
-            projected_sampled_hidden_states = projected_hidden_states[random_subset_indices]
-
-            rewards = torch.from_numpy(
-                session_data.iloc[random_subset_indices]['rewards'].to_numpy()).reshape(-1, 1)
-
-            stimuli = torch.zeros(
-                size=(len(random_subset_indices), 1, 1)).fill_(possible_stimulus)
-
-            model_forward_output = run_model_one_step(
-                model=model,
-                stimulus=stimuli,
-                rewards=rewards,
-                hidden_states=torch.from_numpy(sampled_hidden_states))
-
-            sampled_next_hidden_states = model_forward_output['core_hidden'].detach().numpy()
-
-            projected_sampled_next_hidden_states = pca.transform(
-                sampled_next_hidden_states.reshape(len(random_subset_indices), -1))
-
-            displacement_vector = projected_sampled_next_hidden_states - projected_sampled_hidden_states
-
-            vector_fields_by_side_by_stimuli[side][possible_stimulus] = dict(
-                xrange=xrange,
-                yrange=yrange,
-                displacement_vector=displacement_vector,
-                random_subset_indices=random_subset_indices,
-                sampled_hidden_states=sampled_hidden_states,
-                projected_sampled_hidden_states=projected_sampled_hidden_states,
-                sampled_next_hidden_states=sampled_next_hidden_states,
-                projected_sampled_next_hidden_states=projected_sampled_next_hidden_states)
-
-    return vector_fields_by_side_by_stimuli
-
-
 def compute_projected_hidden_state_trajectory_controlled(model,
                                                          pca):
 
@@ -207,30 +145,26 @@ def compute_model_fixed_points(model,
     # reshape to (num trials, num layers * hidden dimension)
 
     # identify non-first block indices
-    possible_stimuli = np.linspace(-1.5, 1.5, 3)
+    possible_stimuli = torch.from_numpy(np.array([[1.2, 0.2], [0.2, 0.2], [0.2, 1.2]]))
     fixed_points_by_side_by_stimuli = {}
-    for side, session_data_block_side in session_data.groupby('block_stimulus_side'):
+    for side, session_data_block_side in session_data.groupby('block_side'):
         fixed_points_by_side_by_stimuli[side] = dict()
 
         for possible_stimulus in possible_stimuli:
 
-            non_first_block_indices = session_data_block_side.index.to_numpy()
+            initial_sampled_hidden_states = torch.from_numpy(hidden_states)
+            pca_initial_sampled_hidden_states = pca_hidden_states
 
-            random_subset_indices = non_first_block_indices
-
-            initial_sampled_hidden_states = torch.from_numpy(
-                hidden_states[random_subset_indices])
-            pca_initial_sampled_hidden_states = pca_hidden_states[random_subset_indices]
+            # require grad to use fixed point finder i.e. minimize ||h_t - RNN(h_t, possible_stimulus)||
             final_sampled_hidden_states = initial_sampled_hidden_states.clone().requires_grad_(True)
 
-            rewards = torch.from_numpy(
-                session_data.iloc[random_subset_indices]['reward'].to_numpy()).reshape(-1, 1)
+            rewards = torch.from_numpy(session_data.reward.to_numpy()).reshape(-1, 1)
 
-            stimuli = torch.zeros(
-                size=(len(random_subset_indices), 1, 1)).fill_(possible_stimulus)
+            # shape: (len(session_data_, 1, 2)
+            stimuli = torch.stack(len(session_data) * [possible_stimulus], dim=0).unsqueeze(1)
 
             optimizer = torch.optim.SGD([final_sampled_hidden_states], lr=0.01)
-            print(f'Finding fixed points using {num_grad_steps} gradient steps')
+
             for _ in range(num_grad_steps):
                 optimizer.zero_grad()
                 model_forward_output = run_model_one_step(
@@ -250,16 +184,19 @@ def compute_model_fixed_points(model,
                 optimizer.step()
 
             pca_final_sampled_hidden_states = pca.transform(
-                final_sampled_hidden_states.reshape(len(random_subset_indices), -1).detach().numpy())
+                final_sampled_hidden_states.reshape(len(session_data), -1).detach().numpy())
             pca_displacement_vector = pca.transform(
-                displacement_vector.reshape(len(random_subset_indices), -1).detach().numpy())
+                displacement_vector.reshape(len(session_data), -1).detach().numpy())
 
-            fixed_points_by_side_by_stimuli[side][possible_stimulus] = dict(
+            key = 'left={}, right={}'.format(
+                possible_stimulus[0].item(),
+                possible_stimulus[1].item())
+
+            fixed_points_by_side_by_stimuli[side][key] = dict(
                 displacement_vector=displacement_vector.detach().numpy(),
                 displacement_vector_norm=displacement_vector_norm.detach().numpy(),
                 normalized_displacement_vector_norm=normalized_displacement_vector_norm.detach().numpy(),
                 pca_displacement_vector=pca_displacement_vector,
-                random_subset_indices=random_subset_indices,
                 initial_sampled_hidden_states=initial_sampled_hidden_states,
                 pca_initial_sampled_hidden_states=pca_initial_sampled_hidden_states,
                 final_sampled_hidden_states=final_sampled_hidden_states,
@@ -319,6 +256,65 @@ def compute_psytrack_fit(session_data):
         credibleInt=credibleInt)
 
     return psytrack_fit_output
+
+
+def compute_vector_field_by_trial_side_by_stimuli(model,
+                                                  session_data,
+                                                  hidden_states,
+                                                  pca,
+                                                  pca_hidden_states):
+
+    # identify non-first block indices
+    possible_stimuli = torch.from_numpy(np.array([[1.2, 0.2], [0.2, 0.2], [0.2, 1.2]]))
+
+    vector_fields_by_trial_side_by_stimuli = {}
+    for trial_side, trial_side_session_data in session_data.groupby('trial_side'):
+
+        vector_fields_by_trial_side_by_stimuli[trial_side] = dict()
+
+        for possible_stimulus in possible_stimuli:
+
+            # sample subset of indices
+            random_subset_indices = np.random.choice(
+                trial_side_session_data.index,
+                replace=False,
+                size=150)
+
+            sampled_hidden_states = hidden_states[random_subset_indices]
+            sampled_pca_hidden_states = pca_hidden_states[random_subset_indices]
+
+            rewards = torch.from_numpy(
+                session_data.iloc[random_subset_indices]['reward'].to_numpy()).reshape(-1, 1)
+
+            # shape: (len(session_data_, 1, 2)
+            stimuli = torch.stack(len(random_subset_indices) * [possible_stimulus], dim=0).unsqueeze(1)
+
+            model_forward_output = run_model_one_step(
+                model=model,
+                stimulus=stimuli,
+                rewards=rewards,
+                hidden_states=torch.from_numpy(sampled_hidden_states))
+
+            sampled_next_hidden_states = model_forward_output['core_hidden'].detach().numpy()
+
+            next_sampled_pca_hidden_states = pca.transform(
+                sampled_next_hidden_states.reshape(len(random_subset_indices), -1))
+
+            displacement_vector = next_sampled_pca_hidden_states - sampled_pca_hidden_states
+
+            key = 'left={}, right={}'.format(
+                possible_stimulus[0].item(),
+                possible_stimulus[1].item())
+
+            vector_fields_by_trial_side_by_stimuli[trial_side][key] = dict(
+                displacement_vector=displacement_vector,
+                random_subset_indices=random_subset_indices,
+                sampled_hidden_states=sampled_hidden_states,
+                sampled_pca_hidden_states=sampled_pca_hidden_states,
+                next_sampled_hidden_states=sampled_next_hidden_states,
+                next_sampled_pca_hidden_states=next_sampled_pca_hidden_states)
+
+    return vector_fields_by_trial_side_by_stimuli
 
 
 def run_model_one_step(model,
