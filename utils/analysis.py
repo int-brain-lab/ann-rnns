@@ -278,7 +278,7 @@ def compute_vector_field_by_trial_side_by_stimuli(model,
             random_subset_indices = np.random.choice(
                 trial_side_session_data.index,
                 replace=False,
-                size=150)
+                size=min(150, len(trial_side_session_data)))
 
             sampled_hidden_states = hidden_states[random_subset_indices]
             sampled_pca_hidden_states = pca_hidden_states[random_subset_indices]
