@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import pandas as pd
 import torch
 
@@ -10,7 +11,7 @@ def create_model(model_str=None,
 
     # defaults
     if model_str is None:
-        model_str = 'lstm'
+        model_str = 'rnn'
     if model_kwargs is None:
         model_kwargs = dict(
             input_size=3,
@@ -69,8 +70,18 @@ def create_optimizer(model,
     return optimizer
 
 
-def load_checkpoint(checkpoint_path,
+def load_checkpoint(train_log_dir,
                     tensorboard_writer):
+
+    # collect last checkpoint in the log directory
+    checkpoint_paths = [os.path.join(train_log_dir, file_path)
+                        for file_path in os.listdir(train_log_dir)
+                        if file_path.endswith('.pt')]
+
+    # select latest checkpoint path
+    checkpoint_path = sorted(checkpoint_paths, key=os.path.getmtime)[-1]
+
+    print(f'Loading checkpoint at {checkpoint_path}')
 
     save_dict = torch.load(checkpoint_path)
 
@@ -108,7 +119,8 @@ def run_envs(model,
         # squeeze to remove the timestep (i.e. middle dimension) for the environment
         step_output = envs.step(
             actions=model_output['softmax_output'],
-            core_hidden=model_output['core_hidden'])
+            core_hidden=model_output['core_hidden'],
+            model=model)
 
     envs.close()
 
