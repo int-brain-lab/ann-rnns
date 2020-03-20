@@ -48,13 +48,12 @@ def hook_plot_avg_model_prob_by_trial_within_block(hook_input):
         alpha=0.3,
         linewidth=0)
 
-    # ax.set_ylim([0.3, 1.1])
+    ax.set_ylim([0.3, 1.1])
     ax.set_xlim([0., 101.])
     ax.set_xlabel('Trial Within Block')
     ax.set_ylabel('Average P(Correct Action)')
     fig.suptitle('Average P(Correct Action) by Trial Within Block')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag='avg_model_prob_by_trial_index_within_block',
         figure=fig,

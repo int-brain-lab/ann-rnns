@@ -94,7 +94,7 @@ def create_hook_fns_train(start_grad_step,
         (100, utils.plot.hook_plot_pca_hidden_state_fixed_points),
         # (10, utils.plot.hook_plot_psytrack_fit),
         # (10, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
-        (-1, hook_save_model),
+        (10000, hook_save_model),
     ]
 
     train_hooks = create_hook_fns_dict(
@@ -117,9 +117,9 @@ def hook_log_args(hook_input):
         min_trials_per_block=hook_input['envs'][0].min_trials_per_block,
         max_trials_per_block=hook_input['envs'][0].max_trials_per_block,
         max_rnn_steps_per_trial=hook_input['envs'][0].max_rnn_steps_per_trial,
-        stimulus_strengths=hook_input['envs'][0].stimulus_creator.stimulus_strengths,
-        stimulus_strengths_probs=hook_input['envs'][0].stimulus_creator.stimulus_strength_probs,
-        stimulus_side_bias_probs=hook_input['envs'][0].block_side_probs,
+        possible_trial_strengths=hook_input['envs'][0].possible_trial_strengths,
+        possible_trial_strengths_probs=hook_input['envs'][0].possible_trial_strengths_probs,
+        block_side_probs=hook_input['envs'][0].block_side_probs,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty,
         seed=hook_input['seed'],
     )
@@ -182,10 +182,19 @@ def hook_write_scalars(hook_input):
         scalar_value=hook_input['avg_rnn_steps_per_trial'],
         global_step=hook_input['grad_step'])
 
-    hook_input['tensorboard_writer'].add_scalar(
-        tag=hook_input['tag_prefix'] + 'pc1_frac_variance_explained',
-        scalar_value=hook_input['frac_variance_explained'][0],
-        global_step=hook_input['grad_step'])
+    # plot the variance, fraction of variance for the first 5 PCs (arbitrary cutoff)
+    num_pcs_to_plot = 5
+    for i in range(num_pcs_to_plot):
+
+        hook_input['tensorboard_writer'].add_scalar(
+            tag=hook_input['tag_prefix'] + f'pc/{i+1}_frac_variance_explained',
+            scalar_value=hook_input['frac_variance_explained'][i],
+            global_step=hook_input['grad_step'])
+
+        hook_input['tensorboard_writer'].add_scalar(
+            tag=hook_input['tag_prefix'] + f'pc/{i+1}_variance_explained',
+            scalar_value=hook_input['variance_explained'][i],
+            global_step=hook_input['grad_step'])
 
 
 def hook_write_parameter_histograms(hook_input):
