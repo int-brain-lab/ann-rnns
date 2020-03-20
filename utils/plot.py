@@ -39,23 +39,22 @@ def hook_plot_avg_model_prob_by_trial_within_block(hook_input):
 
     fig, ax = plt.subplots(figsize=(12, 8))
     x = np.arange(1, 1 + len(avg_model_correct_action_prob_by_trial_num))
-    ax.plot(x,
-            avg_model_correct_action_prob_by_trial_num)
+    ax.plot(x, avg_model_correct_action_prob_by_trial_num)
 
-    fill_range = sem_model_correct_action_prob_by_trial_num
     ax.fill_between(
-        x,
-        sem_model_correct_action_prob_by_trial_num - fill_range,
-        sem_model_correct_action_prob_by_trial_num + fill_range,
-        alpha=0.9,
+        x=x,
+        y1=avg_model_correct_action_prob_by_trial_num - sem_model_correct_action_prob_by_trial_num,
+        y2=avg_model_correct_action_prob_by_trial_num + sem_model_correct_action_prob_by_trial_num,
+        alpha=0.3,
         linewidth=0)
 
-    ax.set_ylim([0.3, 1.1])
+    # ax.set_ylim([0.3, 1.1])
     ax.set_xlim([0., 101.])
     ax.set_xlabel('Trial Within Block')
     ax.set_ylabel('Average P(Correct Action)')
     fig.suptitle('Average P(Correct Action) by Trial Within Block')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag='avg_model_prob_by_trial_index_within_block',
         figure=fig,
