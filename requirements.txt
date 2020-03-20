@@ -4,6 +4,7 @@ seaborn
 pandas
 matplotlib
 psytrack
+python-louvain
 gym
 numpy
 plotly
