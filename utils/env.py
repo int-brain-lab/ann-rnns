@@ -56,6 +56,7 @@ class IBLSession(gym.Env):
             time_delay_penalty=time_delay_penalty)
         self.reward_fn = self.create_reward_fn(
             time_delay_penalty=time_delay_penalty)
+        self.description_str = create_description_str(env=self)
 
         # to (re)initialize the following variables, call self.reset()
         self.num_trials_per_block = None
@@ -110,18 +111,24 @@ class IBLSession(gym.Env):
                     input.shape should be (batch size = 1, num actions = 2,)
         """
 
-        def reward_fn(target, input):
+        def reward_fn(target, input, timeout):
 
             # max returns (value, index)
             max_prob, max_prob_idx = torch.max(input, dim=1)
 
-            # if probability below threshold, no "action", so no reward
-            if max_prob.item() < 0.9:
-                reward = torch.zeros(1).double()
-            else:
+            if max_prob.item() > 0.9:
                 # for an action to be rewarded, the model must have made the correct choice
                 # also, punish model if action was incorrect
-                reward = 2.*(target == max_prob_idx).double() - 1.
+                reward = 2. * (target == max_prob_idx).double() - 1.
+            elif timeout:
+                # punish model for timing out
+                reward = torch.zeros(1).fill_(-1).double()
+            else:
+                # give 0
+                reward = torch.zeros(1).double()
+
+
+
 
             return reward
 
@@ -139,7 +146,7 @@ class IBLSession(gym.Env):
 
     def reset(self):
         """
-        (Re)initializes experiment.
+        (Re)initializes session.
 
         Previously, we relied on the fact that the RNN had a fixed number of
         steps per trial to preallocate the entire session, and then iterated
@@ -233,7 +240,8 @@ class IBLSession(gym.Env):
 
     def step(self,
              model_softmax_output,
-             model_hidden):
+             model_hidden,
+             model):
         """
 
         :param model_softmax_output: shape (time step=1, 2)
@@ -254,9 +262,11 @@ class IBLSession(gym.Env):
             input=model_softmax_output)
         self.losses[self.current_rnn_step_within_session] = loss
 
+        timeout = (self.current_rnn_step_within_trial + 1) == self.max_rnn_steps_per_trial
         reward = self.reward_fn(
             target=correct_action_index,
-            input=model_softmax_output)
+            input=model_softmax_output,
+            timeout=timeout)
 
         # if RNN or GRU, shape = (number of layers, hidden state size)
         # if LSTM, shape = (num layers, hidden state size, 2)
@@ -303,7 +313,7 @@ class IBLSession(gym.Env):
 
         # move to next trial if either (i) maxed out number of rnn_steps within trial
         # or model made an action i.e. receive a reward/punishment
-        if abs(reward.item()) > 0.9 or self.current_rnn_step_within_trial == self.max_rnn_steps_per_trial:
+        if abs(reward.item()) > 0.9:
 
             self.current_rnn_step_within_trial = 0
             self.current_trial_within_block += 1
@@ -372,9 +382,11 @@ def create_biased_choice_worlds(num_envs=11):
     """
 
     kwargs = dict(
-        blocks_per_session=3,
-        min_trials_per_block=10,
-        max_trials_per_block=30,
+        block_side_probs=((0.5, 0.5), (0.5, 0.5)),
+        blocks_per_session=20,
+        min_trials_per_block=60,
+        max_trials_per_block=100,
+        max_rnn_steps_per_trial=10,
         stimulus_creator=VectorStimulusCreator())
     envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
@@ -388,3 +400,19 @@ def create_custom_worlds(tensorboard_writer,
         stimulus_creator=VectorStimulusCreator())
     envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
+
+
+def create_description_str(env):
+    # TODO: decide what belongs in the environment's description string
+    # description_str = '{}'.format(model.model_str)
+    # for key, value in model.model_kwargs.items():
+    #     if key == 'input_size' or key == 'output_size':
+    #         continue
+    #     if isinstance(value, dict):
+    #         for nkey, nvalue in value.items():
+    #             description_str += ', {}={}'.format(str(nkey), str(nvalue))
+    #     else:
+    #         description_str += ', {}={}'.format(str(key), str(value))
+    # print(description_str)
+    # return description_str
+    pass
