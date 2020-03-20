@@ -84,7 +84,7 @@ def train_model(model,
                     hidden_states=hidden_states.reshape(hidden_states.shape[0], -1),
                     readout_weights=model.readout.weight.data.numpy())
 
-            eigenvalues, frac_variance_explained = compute_eigenvalues_svd(
+            variance_explained, frac_variance_explained = compute_eigenvalues_svd(
                 matrix=hidden_states.reshape(hidden_states.shape[0], -1))
 
             fixed_points_by_side_by_stimuli = compute_model_fixed_points(
@@ -105,6 +105,7 @@ def train_model(model,
                 model=model,
                 envs=envs,
                 optimizer=optimizer,
+                variance_explained=variance_explained,
                 frac_variance_explained=frac_variance_explained,
                 pca_hidden_states=pca_hidden_states,
                 pca_readout_weights=pca_readout_weights,

@@ -13,7 +13,7 @@ def main():
     seed = 1
     set_seed(seed=seed)
 
-    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-19 01:11:31.557944'
+    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-15 18:17:28.747386'
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
@@ -72,7 +72,7 @@ def analyze_model(model,
             hidden_states=hidden_states.reshape(hidden_states.shape[0], -1),
             readout_weights=model.readout.weight.data.numpy())
 
-    eigenvalues, frac_variance_explained = compute_eigenvalues_svd(
+    variance_explained, frac_variance_explained = compute_eigenvalues_svd(
         matrix=hidden_states.reshape(hidden_states.shape[0], -1))
 
     fixed_points_by_side_by_stimuli = compute_model_fixed_points(
