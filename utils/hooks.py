@@ -187,12 +187,12 @@ def hook_write_scalars(hook_input):
     for i in range(num_pcs_to_plot):
 
         hook_input['tensorboard_writer'].add_scalar(
-            tag=hook_input['tag_prefix'] + f'pc/{i+1}_frac_variance_explained',
+            tag=hook_input['tag_prefix'] + f'pc/frac_variance_explained_{i+1}',
             scalar_value=hook_input['frac_variance_explained'][i],
             global_step=hook_input['grad_step'])
 
         hook_input['tensorboard_writer'].add_scalar(
-            tag=hook_input['tag_prefix'] + f'pc/{i+1}_variance_explained',
+            tag=hook_input['tag_prefix'] + f'pc/variance_explained_{i+1}',
             scalar_value=hook_input['variance_explained'][i],
             global_step=hook_input['grad_step'])
 
