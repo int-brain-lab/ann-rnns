@@ -1,20 +1,20 @@
-import pandas as pd
 import gym
 from gym import spaces
 import numpy as np
+import pandas as pd
 import torch
 from torch.nn import NLLLoss
 
-from utils.stimuli import VectorStimulusCreator
-# from utils.subproc_env import SubprocVecEnv
+from utils.stimuli import create_block_stimuli
 from utils.vec_env import VecEnv
 
 
 class IBLSession(gym.Env):
 
     def __init__(self,
-                 stimulus_creator=VectorStimulusCreator(),
                  block_side_probs=((0.8, 0.2), (0.2, 0.8)),
+                 possible_trial_strengths=(0., 0.25, 0.5, 0.75, 1.0, 1.25),
+                 possible_trial_strengths_probs=(1/6, 1/6, 1/6, 1/6, 1/6, 1/6),
                  loss_fn_str='nll',
                  blocks_per_session=10,
                  trials_per_block_param=1 / 60,
@@ -24,22 +24,16 @@ class IBLSession(gym.Env):
                  time_delay_penalty=0.05):
 
         """
-
-        :param stimulus_creator: object that must have
-            observation_space: type gym.spaces
-            create_block_stimuli(): method that generates stimuli
         :param loss_fn_str:
         :param blocks_per_session:
         :param trials_per_block_param:
         :param max_rnn_steps_per_trial:
         """
 
-        self._check_stimulus_creator(
-            stimulus_creator=stimulus_creator)
-        self.stimulus_creator = stimulus_creator
-
         # probability of this block
         self.block_side_probs = block_side_probs
+        self.possible_trial_strengths = possible_trial_strengths
+        self.possible_trial_strengths_probs = possible_trial_strengths_probs
 
         self.blocks_per_session = blocks_per_session
         self.min_trials_per_block = min_trials_per_block
@@ -47,7 +41,7 @@ class IBLSession(gym.Env):
         self.trials_per_block_param = trials_per_block_param
         self.max_rnn_steps_per_trial = max_rnn_steps_per_trial
         self.action_space = spaces.Discrete(2)  # left or right
-        self.observation_space = stimulus_creator.observation_space
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(1,))
         self.reward_range = (0, 1)
         self.loss_fn_str = loss_fn_str
         self.time_delay_penalty = time_delay_penalty
@@ -71,14 +65,6 @@ class IBLSession(gym.Env):
         self.current_rnn_step_within_trial = None
         self.current_rnn_step_within_session = None
         self.total_num_rnn_steps = None
-
-    @staticmethod
-    def _check_stimulus_creator(stimulus_creator):
-
-        # check that stimulus_creator is valid object
-        assert stimulus_creator is not None
-        assert hasattr(stimulus_creator, 'create_block_stimuli')
-        assert hasattr(stimulus_creator, 'observation_space')
 
     @staticmethod
     def create_loss_fn(loss_fn_str, time_delay_penalty):
@@ -126,9 +112,6 @@ class IBLSession(gym.Env):
             else:
                 # give 0
                 reward = torch.zeros(1).double()
-
-
-
 
             return reward
 
@@ -210,9 +193,11 @@ class IBLSession(gym.Env):
         self.stimuli, self.stimuli_strengths = [], []
         self.trial_sides, self.block_sides = [], []
         for num_trials in self.num_trials_per_block:
-            stimulus_creator_output = self.stimulus_creator.create_block_stimuli(
+            stimulus_creator_output = create_block_stimuli(
                 num_trials=num_trials,
                 block_side_bias_probabilities=self.block_side_probs[current_block_side],
+                possible_trial_strengths=self.possible_trial_strengths,
+                possible_trial_strengths_probs=self.possible_trial_strengths_probs,
                 max_rnn_steps_per_trial=self.max_rnn_steps_per_trial)
             self.stimuli.append(torch.from_numpy(stimulus_creator_output['stimuli']))
             self.stimuli_strengths.append(torch.from_numpy(stimulus_creator_output['stimuli_strengths']))
@@ -350,10 +335,10 @@ class IBLSession(gym.Env):
 
 def create_envs(kwargs,
                 num_envs):
+
     def make_env(kwargs):
         def _f():
             return IBLSession(**kwargs)
-
         return _f
 
     envs = VecEnv(make_env_fn=make_env(kwargs=kwargs), num_env=num_envs)
@@ -367,8 +352,7 @@ def create_training_choice_world(batch_size):
     """
 
     kwargs = dict(
-        blocks_per_session=10,
-        stimulus_creator=VectorStimulusCreator())
+        blocks_per_session=10)
     training_choice_worlds = [IBLSession(**kwargs)
                               for _ in range(batch_size)]
     return training_choice_worlds
@@ -382,12 +366,13 @@ def create_biased_choice_worlds(num_envs=11):
     """
 
     kwargs = dict(
-        block_side_probs=((0.5, 0.5), (0.5, 0.5)),
+        block_side_probs=((0.8, 0.2), (0.2, 0.8)),
+        possible_trial_strengths=(0., 0.25, 0.5, 0.75, 1.0, 1.25),
+        possible_trial_strengths_probs=(1 / 6, ) * 6,
         blocks_per_session=20,
         min_trials_per_block=60,
         max_trials_per_block=100,
-        max_rnn_steps_per_trial=10,
-        stimulus_creator=VectorStimulusCreator())
+        max_rnn_steps_per_trial=10)
     envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
 
@@ -396,8 +381,7 @@ def create_custom_worlds(tensorboard_writer,
                          num_envs=1,
                          blocks_per_session=3):
     kwargs = dict(
-        blocks_per_session=blocks_per_session,
-        stimulus_creator=VectorStimulusCreator())
+        blocks_per_session=blocks_per_session)
     envs = create_envs(kwargs=kwargs, num_envs=num_envs)
     return envs
 
