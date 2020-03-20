@@ -79,7 +79,7 @@ class VectorStimulusCreator(StimulusCreator):
         # easy means that its signal distribution is drawn with mean 1.5
         # hard means that its signal distribution is drawn with mean 0.5
         stimuli_strengths = np.random.choice(
-            [1.5, 0.5],
+            [0., 0.25, 0.5, 0.75, 1.0, 1.25],
             size=(num_trials, 1))
 
         # hold trial strength constant for duration of trial
