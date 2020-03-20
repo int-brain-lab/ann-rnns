@@ -11,7 +11,7 @@ def create_hook_fns_dict(hook_fns_frequencies,
                          start_grad_step,
                          num_grad_steps):
 
-    # list of (how many gradient steps per function call, function to call).
+    # hook_fns_frequencies: list of (how many gradient steps per function call, function to call).
     # function must accept single input argument, hook_input.
     # Two unique values:
     #   0: run at start
@@ -43,19 +43,20 @@ def create_hook_fns_dict(hook_fns_frequencies,
 def create_hook_fns_analyze(start_grad_step):
 
     hook_fns_frequencies = [
+        # (0, utils.plot.hook_plot_model_community_detection),
         (0, hook_write_scalars),
-        (0, utils.plot.hook_plot_within_trial_data),
+        (0, utils.plot.hook_plot_within_trial_stimuli_and_model_prob),
         (0, utils.plot.hook_plot_fraction_var_explained),
         (0, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
         (0, utils.plot.hook_plot_psychometric_curves),
-        (0, utils.plot.hook_plot_hidden_state_correlations),
-        (0, utils.plot.hook_plot_hidden_state_projected_phase_space),
-        (0, utils.plot.hook_plot_hidden_state_projected_vector_fields),
-        (0, utils.plot.hook_plot_hidden_state_projected_trajectories),
-        (0, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
-        (0, utils.plot.hook_plot_hidden_state_projected_fixed_points),
-        (0, utils.plot.hook_plot_psytrack_fit),
-        (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
+        # (0, utils.plot.hook_plot_hidden_state_correlations),
+        (0, utils.plot.hook_plot_pca_hidden_state_fixed_points),
+        # (0, utils.plot.hook_plot_pca_hidden_state_activity_within_block),
+        (0, utils.plot.hook_plot_pca_hidden_state_vector_fields),
+        (0, utils.plot.hook_plot_pca_hidden_state_trajectories_within_block),
+        # (0, utils.plot.hook_plot_pca_hidden_state_trajectories_controlled),
+        # (0, utils.plot.hook_plot_psytrack_fit),
+        # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
         # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_time_constants),
     ]
 
@@ -75,24 +76,25 @@ def create_hook_fns_train(start_grad_step,
                           num_grad_steps):
 
     hook_fns_frequencies = [
+        # (5, utils.plot.hook_plot_model_community_detection),
         (0, hook_log_args),
         (5, hook_print_model_progress),
         (5, hook_write_scalars),
-        (5, utils.plot.hook_plot_within_trial_data),
-        (5, utils.plot.hook_plot_fraction_var_explained),
-        (10, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
-        (10, utils.plot.hook_plot_psychometric_curves),
-        (10, utils.plot.hook_plot_model_weights),
+        (50, utils.plot.hook_plot_within_trial_stimuli_and_model_prob),
+        (50, utils.plot.hook_plot_fraction_var_explained),
+        (100, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
+        (100, utils.plot.hook_plot_psychometric_curves),
+        (100, utils.plot.hook_plot_model_weights),
         # (10, utils.plot.hook_plot_model_weights_gradients),
-        (10, utils.plot.hook_plot_hidden_state_correlations),
-        (10, utils.plot.hook_plot_hidden_state_projected_phase_space),
-        (10, utils.plot.hook_plot_hidden_state_projected_vector_fields),
-        # (10, utils.plot.hook_plot_hidden_state_projected_trajectories),
+        (100, utils.plot.hook_plot_hidden_state_correlations),
+        # (10, utils.plot.hook_plot_pca_hidden_state_activity_within_block),
+        (100, utils.plot.hook_plot_pca_hidden_state_vector_fields),
+        (100, utils.plot.hook_plot_pca_hidden_state_trajectories_within_block),
         # (10, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
-        # (10, utils.plot.hook_plot_hidden_state_projected_fixed_points),
+        (100, utils.plot.hook_plot_pca_hidden_state_fixed_points),
         # (10, utils.plot.hook_plot_psytrack_fit),
-        # (10, utils.plot.hook_pl1ot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
-        (5000, hook_save_model),
+        # (10, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
+        (-1, hook_save_model),
     ]
 
     train_hooks = create_hook_fns_dict(
@@ -165,7 +167,6 @@ def hook_save_model(hook_input):
 
 def hook_write_scalars(hook_input):
 
-    # record scalars
     hook_input['tensorboard_writer'].add_scalar(
         tag=hook_input['tag_prefix'] + 'loss_per_grad_step',
         scalar_value=hook_input['avg_loss'],
@@ -179,6 +180,11 @@ def hook_write_scalars(hook_input):
     hook_input['tensorboard_writer'].add_scalar(
         tag=hook_input['tag_prefix'] + 'rnn_steps_per_trial',
         scalar_value=hook_input['avg_rnn_steps_per_trial'],
+        global_step=hook_input['grad_step'])
+
+    hook_input['tensorboard_writer'].add_scalar(
+        tag=hook_input['tag_prefix'] + 'pc1_frac_variance_explained',
+        scalar_value=hook_input['frac_variance_explained'][0],
         global_step=hook_input['grad_step'])
 
 

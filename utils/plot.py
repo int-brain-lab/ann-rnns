@@ -33,47 +33,48 @@ def hook_plot_avg_model_prob_by_trial_within_block(hook_input):
 
     # plot trial number within block (x) vs probability of correct response (y)
     avg_model_correct_action_prob_by_trial_num = session_data.groupby(
-        ['trial_index', 'rnn_step_index'])['correct_action_prob'].mean()
+        ['trial_index'])['correct_action_prob'].mean()
     sem_model_correct_action_prob_by_trial_num = session_data.groupby(
-        ['trial_index', 'rnn_step_index'])['correct_action_prob'].sem()
+        ['trial_index'])['correct_action_prob'].sem()
 
     fig, ax = plt.subplots(figsize=(12, 8))
-    plt.errorbar(
-        x=np.arange(1, 1 + len(avg_model_correct_action_prob_by_trial_num)),
-        y=avg_model_correct_action_prob_by_trial_num,
-        yerr=sem_model_correct_action_prob_by_trial_num,
-        alpha=0.8,
-        ms=3)
+    x = np.arange(1, 1 + len(avg_model_correct_action_prob_by_trial_num))
+    ax.plot(x,
+            avg_model_correct_action_prob_by_trial_num)
+
+    fill_range = sem_model_correct_action_prob_by_trial_num
+    ax.fill_between(
+        x,
+        sem_model_correct_action_prob_by_trial_num - fill_range,
+        sem_model_correct_action_prob_by_trial_num + fill_range,
+        alpha=0.9,
+        linewidth=0)
+
     ax.set_ylim([0.3, 1.1])
-    ax.set_xlim([0., 120.])
-    ax.set_xlabel('RNN Step Within Block')
+    ax.set_xlim([0., 101.])
+    ax.set_xlabel('Trial Within Block')
     ax.set_ylabel('Average P(Correct Action)')
-    fig.suptitle('Average P(Correct Action) by RNN Step Within Block')
+    fig.suptitle('Average P(Correct Action) by Trial Within Block')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     hook_input['tensorboard_writer'].add_figure(
-        tag='avg_model_prob_by_trial_num_within_block',
+        tag='avg_model_prob_by_trial_index_within_block',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)
 
 
 def hook_plot_fraction_var_explained(hook_input):
-    hidden_states = hook_input['hidden_states']
-    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
-    eigenvalues = utils.analysis.compute_eigenvalues_svd(matrix=hidden_states)
-    frac_variance_explained = np.cumsum(eigenvalues / np.sum(eigenvalues))
-    eigenvalue_index = np.arange(1, 1 + len(frac_variance_explained))
 
     fig, ax = plt.subplots()
-    ax.plot(eigenvalue_index,
-            frac_variance_explained,
+    ax.plot(np.arange(1, 1 + len(hook_input['frac_variance_explained'])),
+            hook_input['frac_variance_explained'],
             'bo',
             alpha=0.8,
             ms=3)
-    fig.suptitle('Fraction of Variance Explained by Dimension')
+    fig.suptitle('Fraction of Cumulative Variance Explained by Dimension')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     ax.set_xlabel('Dimension Index')
-    ax.set_ylabel('Variance Explained')
+    ax.set_ylabel('Cumulative Variance Explained')
     ax.set_ylim([0., 1.05])
     hook_input['tensorboard_writer'].add_figure(
         tag='var_explained_by_dimension',
@@ -125,26 +126,26 @@ def hook_plot_hidden_state_correlations(hook_input):
     axes[0].set_aspect("equal")  # ensures little squares don't become rectangles
 
     recurrent_matrix = hook_input['model'].core.weight_hh_l0.data.numpy()
-    # dimension_ratio = recurrent_matrix.shape[0] / recurrent_matrix.shape[1]
+    dimension_ratio = recurrent_matrix.shape[0] / recurrent_matrix.shape[1]
     # # RNN weight will have shape (hidden size, hidden size)
-    # if dimension_ratio == 1:
-    #     recurrent_matrix = recurrent_matrix[indices][:, indices]
-    # # LSTM weight will have shape (4*hidden size, hidden_size)
-    # # GRU weight will have shape (3*hidden size, hidden size)
-    # elif dimension_ratio == 4 or dimension_ratio == 3:
+    if dimension_ratio == 1:
+        recurrent_matrix = recurrent_matrix[indices][:, indices]
+    # LSTM weight will have shape (4*hidden size, hidden_size)
+    # GRU weight will have shape (3*hidden size, hidden size)
+    elif dimension_ratio == 4 or dimension_ratio == 3:
+        pass
+        # TODO add recurrent weight
     #     # TODO unknown whether this is correct
     #     for i in range(int(dimension_ratio)):
     #         recurrent_matrix[i*hidden_size:(i+1)*hidden_size] = \
     #             recurrent_matrix[i*hidden_size + indices][:, indices]
-    # else:
-    #     raise ValueError('Unknown dimension ratio for recurrent weight matrix')
+    else:
+        raise ValueError('Unknown dimension ratio for recurrent weight matrix')
 
     # plot recurrent matrix values
     sns.heatmap(recurrent_matrix,
                 cmap='RdBu_r',
                 ax=axes[1],
-                vmin=-1.,
-                vmax=1.,
                 xticklabels=False,
                 yticklabels=False,
                 square=True,
@@ -160,7 +161,7 @@ def hook_plot_hidden_state_correlations(hook_input):
         close=True)
 
 
-def hook_plot_hidden_state_projected_fixed_points(hook_input):
+def hook_plot_pca_hidden_state_fixed_points(hook_input):
     displacement_norm_cutoff = 0.5
 
     # TODO: deduplicate with hook_plot_hidden_state_projected_vector_fields
@@ -192,9 +193,9 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
                 ax.set_xlabel('Principal Component #1')
 
             if c == 0:
-                ax.set_ylabel(f'Stimulus: {stimulus}')
-            else:
-                ax.set_yticks([], [])
+                ax.set_ylabel(f'{stimulus}')
+            # else:
+            #     ax.set_yticks([], [])
 
             displacement_norms = fixed_points_dict['normalized_displacement_vector_norm']
             smallest_displacement_norm_indices = displacement_norms.argsort()
@@ -230,6 +231,8 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
             except IndexError:
                 print('No fixed points below displacement norm cutoff')
 
+            add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
+
     fig.suptitle(f'Fixed Points (Num Grad Steps = {num_grad_steps})')
 
     # merge the rightmost column for the colorbar
@@ -246,7 +249,7 @@ def hook_plot_hidden_state_projected_fixed_points(hook_input):
         close=True)
 
 
-def hook_plot_hidden_state_projected_phase_space(hook_input):
+def hook_plot_pca_hidden_state_activity_within_block(hook_input):
     session_data = hook_input['session_data']
 
     # create possible color range
@@ -276,6 +279,8 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
         ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
         fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
+        add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
+
         # separate again by block number
         for (session_idx, block_idx), session_data_by_block \
                 in block_side_session_data.groupby(['session_index', 'block_index']):
@@ -289,7 +294,7 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
                 c=trial_colors)
 
     color_bar = fig.colorbar(sc, cax=axes[2])
-    color_bar.set_label('Trial Number within Block')
+    color_bar.set_label('RNN Step within Block')
     hook_input['tensorboard_writer'].add_figure(
         tag='hidden_state_projected_phase_space',
         figure=fig,
@@ -297,7 +302,7 @@ def hook_plot_hidden_state_projected_phase_space(hook_input):
         close=True)
 
 
-def hook_plot_hidden_state_projected_vector_fields(hook_input):
+def hook_plot_pca_hidden_state_vector_fields(hook_input):
     # TODO: deduplicate with hook_plot_hidden_state_projected_fixed_points
 
     session_data = hook_input['session_data']
@@ -334,20 +339,23 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
 
             if c == 0:
                 ax.set_ylabel(stimulus)
-                # ax.set_ylabel('Principal Component #2')
-            else:
-                ax.set_yticks([], [])
+            # else:
+            # ax.set_yticks([], [])
 
-            vector_magnitude = np.linalg.norm(vector_field_dict['displacement_vector'], axis=1)
+            vector_magnitude = np.linalg.norm(
+                vector_field_dict['displacement_vector'],
+                axis=1)
 
             qvr = ax.quiver(
                 vector_field_dict['sampled_pca_hidden_states'][:, 0],
                 vector_field_dict['sampled_pca_hidden_states'][:, 1],
-                0.01 * vector_field_dict['displacement_vector'][:, 0] / vector_magnitude,
-                0.01 * vector_field_dict['displacement_vector'][:, 1] / vector_magnitude,
+                0.005 * vector_field_dict['displacement_vector'][:, 0] / vector_magnitude,
+                0.005 * vector_field_dict['displacement_vector'][:, 1] / vector_magnitude,
                 vector_magnitude,
                 scale=.1,
                 cmap='gist_rainbow')
+
+            add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
 
     # merge the rightmost column for the colorbar
     gs = axes[0, 2].get_gridspec()
@@ -363,29 +371,34 @@ def hook_plot_hidden_state_projected_vector_fields(hook_input):
         close=True)
 
 
-def hook_plot_hidden_state_projected_trajectories(hook_input):
+def hook_plot_pca_hidden_state_trajectories_within_block(hook_input):
     session_data = hook_input['session_data']
 
-    # select only environment 0, first 8 blocks
-    subset_trial_data = session_data[(session_data['session_index'] == 0) &
-                                     (session_data['stimuli_block_number'] < 12)]
-
-    # create possible color range
-    max_block_len = max(subset_trial_data.groupby(['session_index', 'stimuli_block_number']).size())
+    num_rows, num_cols = 3, 4
 
     # separate by side bias
-    num_rows, num_cols = 3, 4
-    fig, axes = plt.subplots(nrows=3,
-                             ncols=4,
-                             gridspec_kw={"width_ratios": [1, 1, 1, 1]},
+    fig, axes = plt.subplots(nrows=num_rows,
+                             ncols=num_cols,
+                             gridspec_kw={"width_ratios": [1] * num_cols},
                              figsize=(18, 12))
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     plt.suptitle(f'Model State Space (Projected) Trajectories')
 
-    for block_num, trial_data_by_block in subset_trial_data.groupby('stimuli_block_number'):
-        row, col = block_num // num_cols, block_num % num_cols
+    # select only environment 0, first 12 blocks
+    subset_session_data = session_data[(session_data['session_index'] == 0) &
+                                       (session_data['block_index'] < num_cols * num_rows)]
+
+    # create possible color range
+    max_block_len = max(subset_session_data.groupby(['session_index', 'block_index']).size())
+
+    for block_idx, session_data_by_block in subset_session_data.groupby('block_index'):
+
+        if block_idx >= num_cols * num_rows:
+            break
+
+        row, col = int(block_idx / num_cols), int(block_idx % num_cols)
         ax = axes[row, col]
-        ax.set_title(f'Block Num: {1 + block_num}')
+        ax.set_title(f'Block Num: {1 + block_idx}')
         ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
         ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
         if row == num_rows - 1:
@@ -393,20 +406,23 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
         if col == 0:
             ax.set_ylabel('Principal Component #2')
 
-        block_indices = trial_data_by_block.index.values
+        block_indices = session_data_by_block.index.values
         proj_hidden_states_block = hook_input['pca_hidden_states'][block_indices]
         # stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
-        segment_text = np.where(trial_data_by_block['actions_correct'], 'C', 'I')
+        # segment_text = np.where(session_data_by_block['reward'] > 0.9, 'C', 'I')
         for i in range(len(block_indices) - 1):
             ax.plot(
                 proj_hidden_states_block[i:i + 2, 0],
                 proj_hidden_states_block[i:i + 2, 1],
                 color=plt.cm.jet(i / max_block_len))
-            ax.text(
-                proj_hidden_states_block[i, 0],
-                proj_hidden_states_block[i, 1],
-                # str(stimuli[i]),
-                segment_text[i])
+            # ax.text(
+            #     proj_hidden_states_block[i, 0],
+            #     proj_hidden_states_block[i, 1],
+            #     # str(stimuli[i]),
+            #     segment_text[i]
+            # )
+
+        add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
 
     # TODO: add colobar without disrupting
     # sm = plt.cm.ScalarMappable(cmap=plt.cm.jet, norm=plt.Normalize(vmin=0, vmax=max_block_len))
@@ -419,7 +435,7 @@ def hook_plot_hidden_state_projected_trajectories(hook_input):
         close=True)
 
 
-def hook_plot_hidden_state_projected_trajectories_controlled(hook_input):
+def hook_plot_pca_hidden_state_trajectories_controlled(hook_input):
     trajectory_controlled_output = utils.analysis.compute_projected_hidden_state_trajectory_controlled(
         model=hook_input['model'],
         pca=hook_input['pca'])
@@ -600,6 +616,12 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
         close=True)
 
 
+def hook_plot_model_community_detection(hook_input):
+    utils.analysis.compute_model_weights_community_detection(hook_input['model'])
+
+    print(10)
+
+
 def hook_plot_model_weights(hook_input):
     weights = dict(
         input=hook_input['model'].core.weight_ih_l0.data.numpy(),
@@ -665,29 +687,35 @@ def hook_plot_model_weights_gradients(hook_input):
 
 
 def hook_plot_psychometric_curves(hook_input):
-    # drop block number 1
-    # at least until we can figure out what to do with zero-initialized hidden state
-    psychometric_data = hook_input['session_data'][['block_side', 'stimulus_strength', 'correct_action_prob']].copy()
-    psychometric_data['stimulus_strength_by_block_side'] = psychometric_data.block_side * psychometric_data.stimulus_strength
-
-    avg_correct_action_prob_by_stim_strength_by_block_side = psychometric_data.groupby(
-        ['stimulus_strength_by_block_side'])['correct_action_prob'].mean()
-    sem_correct_action_prob_by_stim_strength_by_block_side = psychometric_data.groupby(
-        ['stimulus_strength_by_block_side'])['correct_action_prob'].sem()
+    session_data = hook_input['session_data']
 
     fig, ax = plt.subplots(figsize=(12, 8))
-    plt.errorbar(
-        x=avg_correct_action_prob_by_stim_strength_by_block_side.index.values,
-        y=avg_correct_action_prob_by_stim_strength_by_block_side,
-        yerr=sem_correct_action_prob_by_stim_strength_by_block_side,
-        ms=3)
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     fig.suptitle('Psychometric Curves')
-    ax.set_xlabel('Block Side * Stimulus Strength')
+    ax.set_xlabel('Stimulus Strength')
     ax.set_ylabel('Probability of Correct Choice')
     ax.set_ylim([0.4, 1.0])
-    ax.set_xlim([-2, 2])
-    # ax.legend(numpoints=1, loc='best')
+    ax.set_xlim([-0.1, 1.6])
+
+    for block_side, block_side_session_data in session_data.groupby('block_side'):
+        avg_correct_action_prob_by_stim_strength_by_block_side = block_side_session_data.groupby(
+            ['stimulus_strength'])['correct_action_prob'].mean()
+        sem_correct_action_prob_by_stim_strength_by_block_side = block_side_session_data.groupby(
+            ['stimulus_strength'])['correct_action_prob'].sem()
+
+        ax.plot(avg_correct_action_prob_by_stim_strength_by_block_side.index.values,
+                avg_correct_action_prob_by_stim_strength_by_block_side,
+                label=block_side)
+
+        fill_range = sem_correct_action_prob_by_stim_strength_by_block_side
+        ax.fill_between(
+            avg_correct_action_prob_by_stim_strength_by_block_side.index.values,
+            avg_correct_action_prob_by_stim_strength_by_block_side - fill_range,
+            avg_correct_action_prob_by_stim_strength_by_block_side + fill_range,
+            alpha=0.5,
+            linewidth=0)
+
+    ax.legend(numpoints=1, loc='best')
     hook_input['tensorboard_writer'].add_figure(
         tag='psychometric_curves',
         figure=fig,
@@ -798,7 +826,7 @@ def hook_plot_within_block_data(hook_input):
     raise NotImplementedError
 
 
-def hook_plot_within_trial_data(hook_input):
+def hook_plot_within_trial_stimuli_and_model_prob(hook_input):
     session_data = hook_input['session_data']
 
     nrows = 5
@@ -844,3 +872,32 @@ def hook_plot_within_trial_data(hook_input):
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)
+
+
+rotation_matrix = np.array([[0, -1], [1, 0]])
+
+
+def add_pca_readout_vectors_to_axis(ax, hook_input):
+
+    # add readout vectors for left
+    for i, label in enumerate(['Left Readout', 'Right Readout']):
+        ax.arrow(x=0.,
+                 y=0.,
+                 dx=hook_input['pca_readout_weights'][i, 0],
+                 dy=hook_input['pca_readout_weights'][i, 1],
+                 color='black',
+                 length_includes_head=True,
+                 head_width=0.16)
+
+        # calculate perpendicular hyperplane
+        hyperplane = np.matmul(rotation_matrix, hook_input['pca_readout_weights'][i])
+        # scale hyperplane to ensure it covers entire plot
+        hyperplane = 10 * hyperplane / np.linalg.norm(hyperplane)
+        ax.plot([-hyperplane[0], hyperplane[0]],
+                [-hyperplane[1], hyperplane[1]],
+                'k--')
+
+        ax.annotate(
+            label,
+            xy=(hook_input['pca_readout_weights'][i, 0],
+                hook_input['pca_readout_weights'][i, 1]))
