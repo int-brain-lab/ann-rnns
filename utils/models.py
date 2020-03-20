@@ -114,7 +114,6 @@ class RecurrentModel(nn.Module):
         self.recurrent_mask = masks['recurrent_mask']
         self.readout_mask = masks['readout_mask']
 
-
         self.description_str = create_description_str(model=self)
 
         self.core_hidden = None
