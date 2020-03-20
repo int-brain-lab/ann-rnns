@@ -78,9 +78,11 @@ def compute_eigenvalues_svd(matrix):
     """
     feature_means = np.mean(matrix, axis=0)
     s = np.linalg.svd(matrix - feature_means, full_matrices=False, compute_uv=False)
-    eigenvalues = np.power(s, 2) / (matrix.shape[0] - 1)
-    frac_variance_explained = np.cumsum(eigenvalues / np.sum(eigenvalues))
-    return eigenvalues, frac_variance_explained
+
+    # eigenvalues
+    variance_explained = np.power(s, 2) / (matrix.shape[0] - 1)
+    frac_variance_explained = np.cumsum(variance_explained / np.sum(variance_explained))
+    return variance_explained, frac_variance_explained
 
 
 def compute_jacobians_by_side_by_stimuli(model,
