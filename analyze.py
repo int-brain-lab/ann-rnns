@@ -2,7 +2,8 @@ import numpy as np
 import os
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.analysis import compute_model_fixed_points, compute_projected_hidden_states_pca
+from utils.analysis import compute_model_fixed_points, compute_hidden_states_pca, \
+    compute_eigenvalues_svd
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_analyze
 from utils.run import load_checkpoint, run_envs, set_seed
@@ -12,21 +13,15 @@ def main():
     seed = 1
     set_seed(seed=seed)
 
-    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-12 17:35:22.727812'
+    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-19 01:11:31.557944'
     train_log_dir = os.path.join('runs', run_dir)
-
-    # collect last checkpoint in the log directory
-    checkpoint_paths = [os.path.join(train_log_dir, file_path)
-                        for file_path in os.listdir(train_log_dir)
-                        if file_path.endswith('.pt')]
-
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
 
     envs = create_biased_choice_worlds(num_envs=11)
 
     model, optimizer, grad_step = load_checkpoint(
-        checkpoint_path=checkpoint_paths[0],
+        train_log_dir=train_log_dir,
         tensorboard_writer=tensorboard_writer)
 
     hook_fns = create_hook_fns_analyze(
@@ -72,8 +67,13 @@ def analyze_model(model,
         [hidden_state for hidden_state in
          run_envs_output['session_data']['hidden_state'].values])
 
-    pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
-        hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
+    pca_hidden_states, pca_readout_weights, pca_xrange, pca_yrange, pca = \
+        compute_hidden_states_pca(
+            hidden_states=hidden_states.reshape(hidden_states.shape[0], -1),
+            readout_weights=model.readout.weight.data.numpy())
+
+    eigenvalues, frac_variance_explained = compute_eigenvalues_svd(
+        matrix=hidden_states.reshape(hidden_states.shape[0], -1))
 
     fixed_points_by_side_by_stimuli = compute_model_fixed_points(
         model=model,
@@ -93,11 +93,13 @@ def analyze_model(model,
         model=model,
         envs=envs,
         optimizer=optimizer,
+        frac_variance_explained=frac_variance_explained,
         pca_hidden_states=pca_hidden_states,
+        pca_readout_weights=pca_readout_weights,
         pca_xrange=pca_xrange,
         pca_yrange=pca_yrange,
         pca=pca,
-        # fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
+        fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
         tensorboard_writer=tensorboard_writer,
         tag_prefix=tag_prefix,
         seed=seed)

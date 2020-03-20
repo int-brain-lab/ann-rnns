@@ -1,6 +1,11 @@
+import community
+import networkx as nx
+import networkx.algorithms.community
+import networkx.drawing
 import numpy as np
 from psytrack.helper.invBlkTriDiag import getCredibleInterval
 from psytrack.hyperOpt import hyperOpt
+import re
 from sklearn.decomposition.pca import PCA
 import torch
 import torch.autograd
@@ -21,6 +26,52 @@ from utils.run import run_envs
 #     return eigenvalues
 
 
+def compute_model_weights_directed_graph(model):
+
+    weights = dict(
+        input=model.core.weight_ih_l0.data.numpy(),
+        recurrent=model.core.weight_hh_l0.data.numpy(),
+        readout=model.readout.weight.data.numpy()
+    )
+
+    input_num_units = weights['input'].shape[1]
+    recurrent_num_units = weights['recurrent'].shape[0]
+    readout_num_units = weights['readout'].shape[0]
+    total_num_units = input_num_units + recurrent_num_units + readout_num_units
+    total_weight_matrix = np.zeros(shape=(total_num_units, total_num_units))
+
+    # add weight matrices
+    total_weight_matrix[:input_num_units, input_num_units:input_num_units+recurrent_num_units] = \
+        weights['input'].T
+    total_weight_matrix[input_num_units:input_num_units+recurrent_num_units, input_num_units:input_num_units+recurrent_num_units] = \
+        weights['recurrent'].T
+    total_weight_matrix[input_num_units:input_num_units+recurrent_num_units, input_num_units+recurrent_num_units:] = \
+        weights['readout'].T
+
+    model_graph = nx.convert_matrix.from_numpy_matrix(
+        A=total_weight_matrix,
+        create_using=nx.DiGraph)
+
+    return model_graph
+
+
+def compute_model_weights_community_detection(model):
+
+    model_weights_directed_graph = compute_model_weights_directed_graph(model=model)
+    model_graph_numpy = nx.to_numpy_array(model_weights_directed_graph)
+    np.save('model_weights_directed_graph.npy', model_graph_numpy)
+    partition = community.best_partition(model_weights_directed_graph)
+
+    networkx.drawing.draw(
+        model_weights_directed_graph,
+        arrows=True)
+
+    import matplotlib.pyplot as plt
+    plt.show()
+
+    print(10)
+
+
 def compute_eigenvalues_svd(matrix):
     """
     matrix should have shape (num_samples, num_features)
@@ -28,7 +79,8 @@ def compute_eigenvalues_svd(matrix):
     feature_means = np.mean(matrix, axis=0)
     s = np.linalg.svd(matrix - feature_means, full_matrices=False, compute_uv=False)
     eigenvalues = np.power(s, 2) / (matrix.shape[0] - 1)
-    return eigenvalues
+    frac_variance_explained = np.cumsum(eigenvalues / np.sum(eigenvalues))
+    return eigenvalues, frac_variance_explained
 
 
 def compute_jacobians_by_side_by_stimuli(model,
@@ -54,8 +106,10 @@ def compute_jacobians_by_side_by_stimuli(model,
         for stimulus, fixed_points_dict in fixed_points_by_stimuli_dict.items():
             jacobians_by_side_by_stimuli[side][stimulus] = {}
             rewards = torch.from_numpy(
-                trial_data.iloc[:num_fixed_points_to_consider]['rewards'].to_numpy()).reshape(-1, 1)
+                trial_data.iloc[:num_fixed_points_to_consider]['reward'].to_numpy()).reshape(-1, 1)
             rewards = rewards.repeat(unit_basis_vectors.shape[0], 1).requires_grad_(True)
+            _, left_stimulus, _, right_stimulus = re.split(r'[,=]]*', stimulus)
+            left_stimulus, right_stimulus = float(left_stimulus), float(right_stimulus)
 
             stimuli = torch.zeros(
                 size=(num_fixed_points_to_consider * unit_basis_vectors.shape[0], 1, 1)).fill_(stimulus)
@@ -121,15 +175,17 @@ def compute_projected_hidden_state_trajectory_controlled(model,
     return trajectory_controlled_output
 
 
-def compute_projected_hidden_states_pca(hidden_states):
+def compute_hidden_states_pca(hidden_states,
+                              readout_weights):
     # project all hidden states to 2 dimensions
     assert len(hidden_states.shape) == 2
     pca = PCA(n_components=2)
     pca.fit(hidden_states)
-    projected_hidden_states = pca.transform(hidden_states)
-    min_x, max_x = min(projected_hidden_states[:, 0]), max(projected_hidden_states[:, 0])
-    min_y, max_y = min(projected_hidden_states[:, 1]), max(projected_hidden_states[:, 1])
-    return projected_hidden_states, (min_x, max_x), (min_y, max_y), pca
+    pca_hidden_states = pca.transform(hidden_states)
+    pca_readout_weights = pca.transform(readout_weights)
+    min_x, max_x = min(pca_hidden_states[:, 0]), max(pca_hidden_states[:, 0])
+    min_y, max_y = min(pca_hidden_states[:, 1]), max(pca_hidden_states[:, 1])
+    return pca_hidden_states, pca_readout_weights, (min_x, max_x), (min_y, max_y), pca
 
 
 def compute_model_fixed_points(model,
@@ -172,11 +228,22 @@ def compute_model_fixed_points(model,
                     stimulus=stimuli,
                     rewards=rewards,
                     hidden_states=final_sampled_hidden_states)
-                displacement_vector = model_forward_output['core_hidden'] - final_sampled_hidden_states
-                displacement_vector_norm = torch.norm(displacement_vector, dim=(1, 2))
+                # non-LSTM shape: (session size, 1 time step, hidden state size)
+                # LSTM shape: (session size, 1 time step, hidden state size, 2)
+                model_forward_hidden_state = model_forward_output['core_hidden']
+                displacement_vector = model_forward_hidden_state - final_sampled_hidden_states
+                # if LSTM, merge last two dimension
+                if len(displacement_vector.shape) == 4:
+                    displacement_vector = displacement_vector.reshape(
+                        (len(displacement_vector), 1, -1))
+                    model_forward_hidden_state = model_forward_hidden_state.reshape(
+                        (len(model_forward_hidden_state), 1, -1))
+                displacement_vector_norm = torch.norm(
+                    displacement_vector,
+                    dim=(1, 2))
                 normalized_displacement_vector_norm = torch.div(
                     displacement_vector_norm,
-                    torch.norm(model_forward_output['core_hidden'], dim=(1, 2)))
+                    torch.norm(model_forward_hidden_state, dim=(1, 2)))
                 # print(f'Norm of smallest displacement vector: {torch.min(normalized_displacement_vector_norm)}')
                 loss = torch.mean(displacement_vector_norm)
                 # print(f'Fixed point finder loss: {loss.item()}')

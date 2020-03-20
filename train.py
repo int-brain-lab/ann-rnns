@@ -3,7 +3,8 @@ import numpy as np
 import os
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.analysis import compute_model_fixed_points, compute_projected_hidden_states_pca
+from utils.analysis import compute_model_fixed_points, compute_hidden_states_pca, \
+    compute_eigenvalues_svd
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_train
 from utils.run import create_model, create_optimizer, run_envs, set_seed
@@ -25,7 +26,7 @@ def main():
     envs = create_biased_choice_worlds(num_envs=1)
 
     start_grad_step = 0
-    num_grad_steps = 10001
+    num_grad_steps = 25001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
@@ -78,8 +79,13 @@ def train_model(model,
                 [hidden_state for hidden_state in
                  run_envs_output['session_data']['hidden_state'].values])
 
-            pca_hidden_states, pca_xrange, pca_yrange, pca = compute_projected_hidden_states_pca(
-                hidden_states=hidden_states.reshape(hidden_states.shape[0], -1))
+            pca_hidden_states, pca_readout_weights, pca_xrange, pca_yrange, pca = \
+                compute_hidden_states_pca(
+                    hidden_states=hidden_states.reshape(hidden_states.shape[0], -1),
+                    readout_weights=model.readout.weight.data.numpy())
+
+            eigenvalues, frac_variance_explained = compute_eigenvalues_svd(
+                matrix=hidden_states.reshape(hidden_states.shape[0], -1))
 
             fixed_points_by_side_by_stimuli = compute_model_fixed_points(
                 model=model,
@@ -99,11 +105,13 @@ def train_model(model,
                 model=model,
                 envs=envs,
                 optimizer=optimizer,
+                frac_variance_explained=frac_variance_explained,
                 pca_hidden_states=pca_hidden_states,
+                pca_readout_weights=pca_readout_weights,
                 pca_xrange=pca_xrange,
                 pca_yrange=pca_yrange,
                 pca=pca,
-                # fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
+                fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
                 tensorboard_writer=tensorboard_writer,
                 tag_prefix=tag_prefix,
                 seed=seed)
