@@ -15,7 +15,7 @@ def create_model(model_str=None,
     if model_kwargs is None:
         model_kwargs = dict(
             input_size=3,
-            output_size=2,
+            output_size=1,
             core_kwargs=dict(
                 num_layers=1,
                 hidden_size=50),
@@ -118,7 +118,7 @@ def run_envs(model,
 
         # squeeze to remove the timestep (i.e. middle dimension) for the environment
         step_output = envs.step(
-            actions=model_output['softmax_output'],
+            actions=model_output['sigmoid_output'],
             core_hidden=model_output['core_hidden'],
             model=model)
 
@@ -133,6 +133,9 @@ def run_envs(model,
     rows_containing_nan = session_data.isnull().any(axis=1)
     assert rows_containing_nan.sum() == 0
 
+    # reindex, without adding column of old index
+    session_data = session_data.reset_index(drop=True)
+
     # write CSV to disk for manual inspection, if curious
     # session_data.to_csv('session_data.csv', index=False)
 
@@ -143,11 +146,14 @@ def run_envs(model,
     avg_rnn_steps_per_trial = session_data.groupby([
         'session_index', 'block_index', 'trial_index']).size().mean()
 
+    avg_correct_action_prob = session_data['correct_action_prob'].mean()
+
     run_envs_output = dict(
         session_data=session_data,
         avg_reward=avg_reward,
         avg_loss=avg_loss,
-        avg_rnn_steps_per_trial=avg_rnn_steps_per_trial
+        avg_rnn_steps_per_trial=avg_rnn_steps_per_trial,
+        avg_correct_action_prob=avg_correct_action_prob
     )
 
     return run_envs_output

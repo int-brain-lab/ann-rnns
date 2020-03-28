@@ -43,15 +43,16 @@ def create_hook_fns_dict(hook_fns_frequencies,
 def create_hook_fns_analyze(start_grad_step):
 
     hook_fns_frequencies = [
+        (0, utils.plot.hook_plot_block_side_trial_side_by_trial_number),
         # (0, utils.plot.hook_plot_model_community_detection),
         (0, hook_write_scalars),
         (0, utils.plot.hook_plot_within_trial_stimuli_and_model_prob),
         (0, utils.plot.hook_plot_fraction_var_explained),
         (0, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
         (0, utils.plot.hook_plot_psychometric_curves),
-        # (0, utils.plot.hook_plot_hidden_state_correlations),
+        (0, utils.plot.hook_plot_hidden_state_correlations),
         (0, utils.plot.hook_plot_pca_hidden_state_fixed_points),
-        # (0, utils.plot.hook_plot_pca_hidden_state_activity_within_block),
+        (0, utils.plot.hook_plot_pca_hidden_state_activity_within_block),
         (0, utils.plot.hook_plot_pca_hidden_state_vector_fields),
         (0, utils.plot.hook_plot_pca_hidden_state_trajectories_within_block),
         # (0, utils.plot.hook_plot_pca_hidden_state_trajectories_controlled),
@@ -78,23 +79,23 @@ def create_hook_fns_train(start_grad_step,
     hook_fns_frequencies = [
         # (5, utils.plot.hook_plot_model_community_detection),
         (0, hook_log_args),
-        (5, hook_print_model_progress),
-        (5, hook_write_scalars),
-        (50, utils.plot.hook_plot_within_trial_stimuli_and_model_prob),
-        (50, utils.plot.hook_plot_fraction_var_explained),
-        (100, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
-        (100, utils.plot.hook_plot_psychometric_curves),
-        (100, utils.plot.hook_plot_model_weights),
+        (25, hook_print_model_progress),
+        (25, hook_write_scalars),
+        (250, utils.plot.hook_plot_within_trial_stimuli_and_model_prob),
+        (250, utils.plot.hook_plot_fraction_var_explained),
+        (250, utils.plot.hook_plot_avg_model_prob_by_trial_within_block),
+        (250, utils.plot.hook_plot_psychometric_curves),
+        (250, utils.plot.hook_plot_model_weights),
         # (10, utils.plot.hook_plot_model_weights_gradients),
-        (100, utils.plot.hook_plot_hidden_state_correlations),
+        (250, utils.plot.hook_plot_hidden_state_correlations),
         # (10, utils.plot.hook_plot_pca_hidden_state_activity_within_block),
-        (100, utils.plot.hook_plot_pca_hidden_state_vector_fields),
-        (100, utils.plot.hook_plot_pca_hidden_state_trajectories_within_block),
+        (250, utils.plot.hook_plot_pca_hidden_state_vector_fields),
+        (250, utils.plot.hook_plot_pca_hidden_state_trajectories_within_block),
         # (10, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
-        (100, utils.plot.hook_plot_pca_hidden_state_fixed_points),
+        (250, utils.plot.hook_plot_pca_hidden_state_fixed_points),
         # (10, utils.plot.hook_plot_psytrack_fit),
         # (10, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
-        (10000, hook_save_model),
+        (5000, hook_save_model),
     ]
 
     train_hooks = create_hook_fns_dict(
@@ -168,27 +169,35 @@ def hook_save_model(hook_input):
 def hook_write_scalars(hook_input):
 
     hook_input['tensorboard_writer'].add_scalar(
-        tag=hook_input['tag_prefix'] + 'loss_per_grad_step',
+        tag=hook_input['tag_prefix'] + 'perf/loss_per_grad_step',
         scalar_value=hook_input['avg_loss'],
         global_step=hook_input['grad_step'])
 
+    print('Reward per gradient step: ', hook_input['avg_reward'])
+
     hook_input['tensorboard_writer'].add_scalar(
-        tag=hook_input['tag_prefix'] + 'reward_per_grad_step',
+        tag=hook_input['tag_prefix'] + 'perf/reward_per_grad_step',
         scalar_value=hook_input['avg_reward'],
         global_step=hook_input['grad_step'])
 
     hook_input['tensorboard_writer'].add_scalar(
-        tag=hook_input['tag_prefix'] + 'rnn_steps_per_trial',
+        tag=hook_input['tag_prefix'] + 'perf/avg_correct_action_prob',
+        scalar_value=hook_input['avg_correct_action_prob'],
+        global_step=hook_input['grad_step'])
+
+    hook_input['tensorboard_writer'].add_scalar(
+        tag=hook_input['tag_prefix'] + 'perf/rnn_steps_per_trial',
         scalar_value=hook_input['avg_rnn_steps_per_trial'],
         global_step=hook_input['grad_step'])
 
     # plot the variance, fraction of variance for the first 5 PCs (arbitrary cutoff)
     num_pcs_to_plot = 5
+    total_variance = np.sum(hook_input['variance_explained'])
     for i in range(num_pcs_to_plot):
 
         hook_input['tensorboard_writer'].add_scalar(
             tag=hook_input['tag_prefix'] + f'pc/frac_variance_explained_{i+1}',
-            scalar_value=hook_input['frac_variance_explained'][i],
+            scalar_value=hook_input['variance_explained'][i] / total_variance,
             global_step=hook_input['grad_step'])
 
         hook_input['tensorboard_writer'].add_scalar(

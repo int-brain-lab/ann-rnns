@@ -21,7 +21,11 @@ def create_block_stimuli(num_trials,
     signal_sides_indices = np.random.choice(
         [0, 1],
         p=block_side_bias_probabilities,
-        size=(num_trials, max_rnn_steps_per_trial))
+        size=(num_trials, 1))
+    signal_sides_indices = np.repeat(
+        signal_sides_indices,
+        axis=-1,
+        repeats=max_rnn_steps_per_trial)
 
     trial_sides = 2*signal_sides_indices - 1
 
@@ -46,8 +50,11 @@ def create_block_stimuli(num_trials,
     # add signal to noise
     # rely on nice identity matrix trick for converting boolean signal_side_indices
     # to one-hot encoded for indexing
-    # signal_sides_indices = (signal_sides+1)//2
-    sampled_stimuli[np.eye(2)[signal_sides_indices].astype(bool)] += signal.flatten()
+    sampled_stimuli[np.eye(2)[signal_sides_indices].astype(bool)] = signal.flatten()
+
+    # import matplotlib.pyplot as plt
+    # plt.scatter(sampled_stimuli[:,:,0].flatten(), sampled_stimuli[:,:,1].flatten())
+    # plt.show()
 
     output = dict(
         stimuli=sampled_stimuli,

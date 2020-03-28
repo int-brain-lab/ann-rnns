@@ -3,7 +3,7 @@ from gym import spaces
 import numpy as np
 import pandas as pd
 import torch
-from torch.nn import NLLLoss
+from torch.nn import BCELoss
 
 from utils.stimuli import create_block_stimuli
 from utils.vec_env import VecEnv
@@ -17,8 +17,8 @@ class IBLSession(gym.Env):
                  possible_trial_strengths_probs=(1/6, 1/6, 1/6, 1/6, 1/6, 1/6),
                  loss_fn_str='nll',
                  blocks_per_session=10,
-                 trials_per_block_param=1 / 60,
-                 min_trials_per_block=60,
+                 trials_per_block_param=1 / 50,
+                 min_trials_per_block=20,
                  max_trials_per_block=100,
                  max_rnn_steps_per_trial=10,
                  time_delay_penalty=0.05):
@@ -77,11 +77,11 @@ class IBLSession(gym.Env):
         """
 
         if loss_fn_str == 'nll':
-            nllloss = NLLLoss()
+            bceloss = BCELoss()
 
             def loss_fn(target, input):
                 # TODO: adding time delay penalty is currently pointless
-                loss = nllloss(target=target, input=input) + time_delay_penalty
+                loss = bceloss(target=target, input=input) + time_delay_penalty
                 return loss
 
         else:
@@ -100,18 +100,29 @@ class IBLSession(gym.Env):
         def reward_fn(target, input, timeout):
 
             # max returns (value, index)
-            max_prob, max_prob_idx = torch.max(input, dim=1)
+            if input > 1 - input:
+                max_prob = input
+                max_prob_idx = 1
+            else:
+                max_prob = 1 - input
+                max_prob_idx = 0
 
-            if max_prob.item() > 0.9:
+            if max_prob > 0.9:
                 # for an action to be rewarded, the model must have made the correct choice
                 # also, punish model if action was incorrect
                 reward = 2. * (target == max_prob_idx).double() - 1.
             elif timeout:
                 # punish model for timing out
-                reward = torch.zeros(1).fill_(-1).double()
+                reward = torch.zeros(1)[0].fill_(-1).double()
             else:
                 # give 0
-                reward = torch.zeros(1).double()
+                reward = torch.zeros(1)[0].double()
+
+            # print(f'target: {target.item()}\t'
+            #       f'input: {round(input.item(), 2)}\t'
+            #       f'max prob: {round(max_prob.item(), 2)}\t'
+            #       f'max prob index: {max_prob_idx}\t'
+            #       f'reward: {reward.item()}')
 
             return reward
 
@@ -224,33 +235,33 @@ class IBLSession(gym.Env):
         return step_output
 
     def step(self,
-             model_softmax_output,
+             model_sigmoid_output,
              model_hidden,
              model):
         """
 
-        :param model_softmax_output: shape (time step=1, 2)
+        :param model_sigmoid_output: shape (time step=1, 1)
         :param model_hidden:
         :return:
         """
 
-        left_action_prob = model_softmax_output[0, 0].item()
-        right_action_prob = model_softmax_output[0, 1].item()
+        right_action_prob = model_sigmoid_output[0, 0].item()
+        left_action_prob = 1. - right_action_prob
         correct_action_index = (1 + self.trial_sides[self.current_block_within_session][
             self.current_trial_within_block, self.current_rnn_step_within_trial]) // 2
-        correct_action_prob = model_softmax_output[0, correct_action_index.item()].item()
+        correct_action_prob = left_action_prob if correct_action_index.item() == 0 else right_action_prob
 
-        # target has shape (batch=1,)
-        # reshape action to (batch=1, 2) since loss fn has no notion of sequence
+        # target has shape (batch=1,). Reshape to (1, 1) to match action with shape
+        # (batch = 1, 1)
         loss = self.loss_fn(
-            target=correct_action_index.reshape((1,)),
-            input=model_softmax_output)
+            target=correct_action_index.reshape((1, 1)).double(),
+            input=model_sigmoid_output)
         self.losses[self.current_rnn_step_within_session] = loss
 
         timeout = (self.current_rnn_step_within_trial + 1) == self.max_rnn_steps_per_trial
         reward = self.reward_fn(
             target=correct_action_index,
-            input=model_softmax_output,
+            input=model_sigmoid_output,
             timeout=timeout)
 
         # if RNN or GRU, shape = (number of layers, hidden state size)
@@ -333,15 +344,15 @@ class IBLSession(gym.Env):
         return step_output
 
 
-def create_envs(kwargs,
-                num_envs):
+def create_sessions(kwargs,
+                    num_sessions):
 
-    def make_env(kwargs):
+    def make_session(kwargs):
         def _f():
             return IBLSession(**kwargs)
         return _f
 
-    envs = VecEnv(make_env_fn=make_env(kwargs=kwargs), num_env=num_envs)
+    envs = VecEnv(make_env_fn=make_session(kwargs=kwargs), num_env=num_sessions)
     return envs
 
 
@@ -358,7 +369,7 @@ def create_training_choice_world(batch_size):
     return training_choice_worlds
 
 
-def create_biased_choice_worlds(num_envs=11):
+def create_biased_choice_worlds(num_sessions=11):
     """
     "biased choice world during which visual stimuli have to be actively moved
     by the mouse; left and right stimuli are presented with different probability
@@ -367,14 +378,15 @@ def create_biased_choice_worlds(num_envs=11):
 
     kwargs = dict(
         block_side_probs=((0.8, 0.2), (0.2, 0.8)),
-        possible_trial_strengths=(0., 0.25, 0.5, 0.75, 1.0, 1.25),
-        possible_trial_strengths_probs=(1 / 6, ) * 6,
-        blocks_per_session=20,
-        min_trials_per_block=60,
+        trials_per_block_param=1 / 50,  # denominator is the mean
+        possible_trial_strengths=(0., 0.25, 0.5, 0.75, 1.0),
+        possible_trial_strengths_probs=(1 / 5,) * 5,
+        blocks_per_session=12,
+        min_trials_per_block=40,
         max_trials_per_block=100,
         max_rnn_steps_per_trial=10)
-    envs = create_envs(kwargs=kwargs, num_envs=num_envs)
-    return envs
+    sessions = create_sessions(kwargs=kwargs, num_sessions=num_sessions)
+    return sessions
 
 
 def create_custom_worlds(tensorboard_writer,
@@ -382,7 +394,7 @@ def create_custom_worlds(tensorboard_writer,
                          blocks_per_session=3):
     kwargs = dict(
         blocks_per_session=blocks_per_session)
-    envs = create_envs(kwargs=kwargs, num_envs=num_envs)
+    envs = create_sessions(kwargs=kwargs, num_sessions=num_envs)
     return envs
 
 
