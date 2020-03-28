@@ -121,7 +121,6 @@ class RecurrentModel(nn.Module):
             in_features=model_kwargs['core_kwargs']['hidden_size'],
             out_features=self.output_size,
             bias=True)
-        self.softmax = nn.Softmax(dim=2)
 
         # converts all weights into doubles i.e. float64
         # this prevents PyTorch from breaking when multiplying float32 * float64
@@ -310,14 +309,14 @@ class RecurrentModel(nn.Module):
 
         linear_output = self.readout(core_output)
 
-        # shape: (batch size, 1, output dim e.g. 2)
-        softmax_output = self.softmax(linear_output)
+        # shape: (batch size, 1, output dim e.g. 1)
+        sigmoid_output = torch.sigmoid(linear_output)
 
         forward_output = dict(
             core_output=core_output,
             core_hidden=core_hidden,
             linear_output=linear_output,
-            softmax_output=softmax_output)
+            sigmoid_output=sigmoid_output)
 
         return forward_output
 
