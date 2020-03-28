@@ -13,12 +13,12 @@ def main():
     seed = 1
     set_seed(seed=seed)
 
-    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-15 18:17:28.747386'
+    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-22 23:51:09.121855'
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
 
-    envs = create_biased_choice_worlds(num_envs=11)
+    envs = create_biased_choice_worlds(num_sessions=15)
 
     model, optimizer, grad_step = load_checkpoint(
         train_log_dir=train_log_dir,
@@ -84,6 +84,7 @@ def analyze_model(model,
         num_grad_steps=50)
 
     hook_input = dict(
+        avg_correct_action_prob=run_envs_output['avg_correct_action_prob'],
         avg_loss=run_envs_output['avg_loss'].item(),
         avg_reward=run_envs_output['avg_reward'].item(),
         avg_rnn_steps_per_trial=run_envs_output['avg_rnn_steps_per_trial'],
@@ -93,6 +94,7 @@ def analyze_model(model,
         model=model,
         envs=envs,
         optimizer=optimizer,
+        variance_explained=variance_explained,
         frac_variance_explained=frac_variance_explained,
         pca_hidden_states=pca_hidden_states,
         pca_readout_weights=pca_readout_weights,

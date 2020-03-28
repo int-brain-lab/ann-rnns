@@ -1,6 +1,7 @@
 from datetime import datetime
 import numpy as np
 import os
+import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.analysis import compute_model_fixed_points, compute_hidden_states_pca, \
@@ -23,7 +24,7 @@ def main():
         model=model,
         optimizer_str='sgd')
 
-    envs = create_biased_choice_worlds(num_envs=1)
+    envs = create_biased_choice_worlds(num_sessions=1)
 
     start_grad_step = 0
     num_grad_steps = 25001
@@ -96,6 +97,7 @@ def train_model(model,
                 num_grad_steps=50)
 
             hook_input = dict(
+                avg_correct_action_prob=run_envs_output['avg_correct_action_prob'],
                 avg_loss=run_envs_output['avg_loss'].item(),
                 avg_reward=run_envs_output['avg_reward'].item(),
                 avg_rnn_steps_per_trial=run_envs_output['avg_rnn_steps_per_trial'],
