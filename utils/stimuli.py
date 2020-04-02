@@ -11,8 +11,8 @@ def create_block_stimuli(num_trials,
 
     # sample standard normal noise for both left and right stimuli
     sampled_stimuli = np.random.normal(
-        loc=0,
-        scale=0.1,
+        loc=0.,
+        scale=1.,
         size=(num_trials, max_rnn_steps_per_trial, 2))
 
     # now, determine which sides will have signal
@@ -51,10 +51,6 @@ def create_block_stimuli(num_trials,
     # rely on nice identity matrix trick for converting boolean signal_side_indices
     # to one-hot encoded for indexing
     sampled_stimuli[np.eye(2)[signal_sides_indices].astype(bool)] = signal.flatten()
-
-    # import matplotlib.pyplot as plt
-    # plt.scatter(sampled_stimuli[:,:,0].flatten(), sampled_stimuli[:,:,1].flatten())
-    # plt.show()
 
     output = dict(
         stimuli=sampled_stimuli,
