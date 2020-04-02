@@ -376,11 +376,15 @@ def create_biased_choice_worlds(num_sessions=11):
     in blocks of trials."
     """
 
+    num_means = 4
+    possible_trial_strengths = tuple(np.linspace(0., 3, num_means))
+    possible_trial_strengths_probs = (1 / num_means, ) * num_means
+
     kwargs = dict(
         block_side_probs=((0.8, 0.2), (0.2, 0.8)),
         trials_per_block_param=1 / 50,  # denominator is the mean
-        possible_trial_strengths=(0., 0.25, 0.5, 0.75, 1.0),
-        possible_trial_strengths_probs=(1 / 5,) * 5,
+        possible_trial_strengths=possible_trial_strengths,
+        possible_trial_strengths_probs=possible_trial_strengths_probs,
         blocks_per_session=12,
         min_trials_per_block=40,
         max_trials_per_block=100,
