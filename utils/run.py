@@ -140,20 +140,23 @@ def run_envs(model,
     # session_data.to_csv('session_data.csv', index=False)
 
     # divide by total trials, batch size
-    avg_reward = total_reward / (total_rnn_steps * len(envs))
-    avg_loss = total_loss / (total_rnn_steps * len(envs))
+    total_trials = len(session_data.groupby([
+        'session_index', 'block_index', 'trial_index']))
+    avg_reward_per_trial = total_reward / total_trials
+    avg_loss_per_dt = total_loss / (total_rnn_steps * len(envs))
 
-    avg_rnn_steps_per_trial = session_data.groupby([
+    avg_dts_per_trial = session_data.groupby([
         'session_index', 'block_index', 'trial_index']).size().mean()
 
-    avg_correct_action_prob = session_data['correct_action_prob'].mean()
+    avg_correct_action_prob_on_last_dt = np.mean(session_data.groupby([
+        'session_index', 'block_index', 'trial_index']).last()['correct_action_prob'])
 
     run_envs_output = dict(
         session_data=session_data,
-        avg_reward=avg_reward,
-        avg_loss=avg_loss,
-        avg_rnn_steps_per_trial=avg_rnn_steps_per_trial,
-        avg_correct_action_prob=avg_correct_action_prob
+        avg_reward_per_trial=avg_reward_per_trial,
+        avg_loss_per_dt=avg_loss_per_dt,
+        avg_dts_per_trial=avg_dts_per_trial,
+        avg_correct_action_prob_on_last_dt=avg_correct_action_prob_on_last_dt
     )
 
     return run_envs_output

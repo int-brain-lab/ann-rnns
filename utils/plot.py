@@ -11,7 +11,16 @@ import seaborn as sns
 import utils.analysis
 
 # increase resolution
-plt.rcParams["figure.dpi"] = 100.
+plt.rcParams["figure.dpi"] = 200.
+
+
+def create_rotation_matrix(theta):
+    rotation_matrix = np.array([[np.cos(theta), -np.sin(theta)],
+                                [np.sin(theta), np.cos(theta)]])
+    return rotation_matrix
+
+
+rotation_matrix_90 = create_rotation_matrix(theta=np.pi / 2)
 
 # map for converting left and right to numeric -1, 1 and vice versa
 side_string_map = {
@@ -27,39 +36,6 @@ side_color_map = {
     'right': 'tab:blue',
     side_string_map['right']: 'tab:blue',
 }
-
-
-def hook_plot_avg_model_prob_by_trial_within_block(hook_input):
-    session_data = hook_input['session_data']
-
-    # plot trial number within block (x) vs probability of correct response (y)
-    avg_model_correct_action_prob_by_trial_num = session_data.groupby(
-        ['trial_index'])['correct_action_prob'].mean()
-    sem_model_correct_action_prob_by_trial_num = session_data.groupby(
-        ['trial_index'])['correct_action_prob'].sem()
-
-    fig, ax = plt.subplots(figsize=(12, 8))
-    x = np.arange(1, 1 + len(avg_model_correct_action_prob_by_trial_num))
-    ax.plot(x, avg_model_correct_action_prob_by_trial_num)
-
-    ax.fill_between(
-        x=x,
-        y1=avg_model_correct_action_prob_by_trial_num - sem_model_correct_action_prob_by_trial_num,
-        y2=avg_model_correct_action_prob_by_trial_num + sem_model_correct_action_prob_by_trial_num,
-        alpha=0.3,
-        linewidth=0)
-
-    ax.set_ylim([0.3, 1.1])
-    ax.set_xlim([0., 101.])
-    ax.set_xlabel('Trial Within Block')
-    ax.set_ylabel('Average P(Correct Action)')
-    fig.suptitle('Average P(Correct Action) by Trial Within Block')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    hook_input['tensorboard_writer'].add_figure(
-        tag='avg_model_prob_by_trial_index_within_block',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
 
 
 def hook_plot_block_side_trial_side_by_trial_number(hook_input):
@@ -144,6 +120,7 @@ def hook_plot_hidden_state_correlations(hook_input):
     sns.heatmap(hidden_state_correlations[indices][:, indices],
                 cmap='RdBu_r',
                 ax=axes[0],
+                center=0,
                 vmin=-1.,
                 vmax=1.,
                 square=True,
@@ -176,6 +153,7 @@ def hook_plot_hidden_state_correlations(hook_input):
     sns.heatmap(recurrent_matrix,
                 cmap='RdBu_r',
                 ax=axes[1],
+                center=0,
                 xticklabels=False,
                 yticklabels=False,
                 square=True,
@@ -295,11 +273,11 @@ def hook_plot_pca_hidden_state_activity_within_block(hook_input):
 
     for trial_side, block_side_session_data in session_data.groupby('block_side'):
 
-        if side_string_map[trial_side] == 'left':
+        if side_string_map[trial_side] == 'Left':
             ax = axes[0]
             ax.set_title(f'Left Blocks')
             ax.set_ylabel('Principal Component #2')
-        elif side_string_map[trial_side] == 'right':
+        elif side_string_map[trial_side] == 'Right':
             ax = axes[1]
             ax.set_title(f'Right Blocks')
         else:
@@ -466,7 +444,7 @@ def hook_plot_pca_hidden_state_trajectories_within_block(hook_input):
         close=True)
 
 
-def hook_plot_pca_hidden_state_trajectories_controlled(hook_input):
+def hook_plot_pca_hidden_state_trajectories_within_block_smooth(hook_input):
     trajectory_controlled_output = utils.analysis.compute_projected_hidden_state_trajectory_controlled(
         model=hook_input['model'],
         pca=hook_input['pca'])
@@ -653,6 +631,186 @@ def hook_plot_model_community_detection(hook_input):
     print(10)
 
 
+def hook_plot_model_prob_correct_action_by_trial_within_block(hook_input):
+    session_data = hook_input['session_data']
+
+    # plot trial number within block (x) vs probability of correct response (y)
+    avg_model_correct_action_prob_by_trial_num = session_data.groupby(
+        ['trial_index'])['correct_action_prob'].mean()
+    sem_model_correct_action_prob_by_trial_num = session_data.groupby(
+        ['trial_index'])['correct_action_prob'].sem()
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    x = np.arange(1, 1 + len(avg_model_correct_action_prob_by_trial_num))
+    ax.plot(x, avg_model_correct_action_prob_by_trial_num)
+
+    ax.fill_between(
+        x=x,
+        y1=avg_model_correct_action_prob_by_trial_num - sem_model_correct_action_prob_by_trial_num,
+        y2=avg_model_correct_action_prob_by_trial_num + sem_model_correct_action_prob_by_trial_num,
+        alpha=0.3,
+        linewidth=0)
+
+    ax.set_ylim([0.3, 1.1])
+    ax.set_xlim([0., 101.])
+    ax.set_xlabel('Trial Within Block')
+    ax.set_ylabel('Average P(Correct Action)')
+    fig.suptitle('Average P(Correct Action) by Trial Within Block')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    hook_input['tensorboard_writer'].add_figure(
+        tag='model_prob_correct_action_by_trial_within_block',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
+def hook_plot_model_prob_correct_action_by_stimuli(hook_input):
+
+    session_data = hook_input['session_data']
+
+    for block_side, block_session_data in session_data.groupby(['block_side']):
+
+        block_side_str = side_string_map[block_side]
+
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+        if block_side == 1:
+            block_side_action_prob = block_session_data.right_action_prob
+        elif block_side == -1:
+            block_side_action_prob = block_session_data.left_action_prob
+        else:
+            raise ValueError('invalid block side')
+        ax.scatter(block_session_data.left_stimulus,
+                   block_session_data.right_stimulus,
+                   block_side_action_prob)
+        ax.set_xlabel('Left Stimulus')
+        ax.set_ylabel('Right Stimulus')
+        ax.set_zlabel(f'P({block_side_str} Action | {block_side_str} Block)')
+        hook_input['tensorboard_writer'].add_figure(
+            tag=f'model_prob_correct_action_by_stimuli_{block_side_str.lower()}',
+            figure=fig,
+            global_step=hook_input['grad_step'],
+            close=True)
+
+
+def hook_plot_model_prob_correct_action_by_stimuli_strength(hook_input):
+
+    session_data = hook_input['session_data']
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    ax.set_title('P(Left Action) by Trial Stimulus Strength')
+    ax.set_xlabel('Trial Stimulus Strength')
+    ax.set_ylabel('P(Left Action)')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    for block_side, block_session_data in session_data.groupby(['block_side']):
+
+        # plot trial number within block (x) vs probability of correct response (y)
+        avg_model_prob_correct_action_by_stimuli_strength = block_session_data.groupby(
+            ['stimulus_strength'])['left_action_prob'].mean()
+        sem_model_prob_correct_action_by_stimuli_strength = session_data.groupby(
+            ['stimulus_strength'])['left_action_prob'].sem()
+
+        x = np.arange(1, 1 + len(avg_model_prob_correct_action_by_stimuli_strength))
+        ax.plot(
+            x,
+            avg_model_prob_correct_action_by_stimuli_strength,
+            label=f'{side_string_map[block_side]} Block')
+        ax.fill_between(
+            x=x,
+            y1=avg_model_prob_correct_action_by_stimuli_strength - sem_model_prob_correct_action_by_stimuli_strength,
+            y2=avg_model_prob_correct_action_by_stimuli_strength + sem_model_prob_correct_action_by_stimuli_strength,
+            alpha=0.3,
+            linewidth=0)
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag=f'hook_plot_model_prob_correct_action_by_stimuli_strength',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
+def hook_plot_model_prob_correct_slope_intercept_by_prev_block_duration(hook_input):
+    session_data = hook_input['session_data']
+
+    num_trials_to_consider = 10
+
+    new_data = dict(
+        prev_block_durations=[],
+        model_prob_correct_slopes=[],
+        model_prob_correct_intercepts=[])
+
+    for (session_index, block_index), block_session_data in session_data.groupby(
+            ['session_index', 'block_index']):
+
+        # exclude first block because they have no preceding block!
+        if block_index == 0:
+            continue
+
+        prev_block_duration = max(
+            session_data[(session_data.session_index == session_index) &
+                         (session_data.block_index == (block_index - 1))].trial_index)
+
+        # keep only the first ten trials
+        first_n_trials = block_session_data[block_session_data.trial_index < num_trials_to_consider]
+
+        # calculate slope of best fit
+        coefficients = np.polyfit(x=first_n_trials.trial_index.values.astype(np.float32),
+                       y=first_n_trials.correct_action_prob.values.astype(np.float32),  # need to convert
+                       deg=1)
+        slope, intercept = coefficients[0], coefficients[1]
+
+        # plot the best fit line
+        # plt.plot(first_n_trials.trial_index.values.astype(np.float32),
+        #          first_n_trials.correct_action_prob.values.astype(np.float32))
+        # plt.plot(first_n_trials.trial_index.values.astype(np.float32),
+        #          np.poly1d(coefficients)(first_n_trials.trial_index.values.astype(np.float32)))
+        # plt.show()
+
+        new_data['prev_block_durations'].append(prev_block_duration)
+        new_data['model_prob_correct_slopes'].append(slope)
+        new_data['model_prob_correct_intercepts'].append(intercept)
+
+    means_sem = pd.DataFrame(new_data).groupby('prev_block_durations').agg(['mean', 'sem'])
+
+    fig, axes = plt.subplots(nrows=2, figsize=(12, 8), sharex=True)
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    for i, column_str in enumerate(['model_prob_correct_slopes', 'model_prob_correct_intercepts']):
+        ax = axes[i]
+        if i == 0:
+            ax.set_title(f'Slope of P(Correct Action) (First {num_trials_to_consider}'
+                         f' Trials) by Previous Block Duration')
+            ax.set_ylabel('Slope of Model P(Correct Action)')
+        elif i == 1:
+            ax.set_title(f'Intercept of P(Correct Action) (First {num_trials_to_consider}'
+                         f' Trials) by Previous Block Duration')
+            ax.set_ylabel('Intercept of Model P(Correct Action)')
+        else:
+            raise ValueError('Impermissible axis number')
+
+        # plot mean
+        ax.plot(means_sem.index.values,
+                means_sem[column_str]['mean'].values,
+                '-o',
+                markersize=10)
+
+        # add SEM
+        ax.fill_between(
+            x=means_sem.index.values,
+            y1=means_sem[column_str]['mean'].values - means_sem[column_str]['sem'].values,
+            y2=means_sem[column_str]['mean'].values + means_sem[column_str]['sem'].values,
+            alpha=0.3,
+            linewidth=0)
+    ax.set_xlabel('Previous Block Duration')
+    hook_input['tensorboard_writer'].add_figure(
+        tag='model_prob_correct_slope_intercept_by_prev_block_duration',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
 def hook_plot_model_weights(hook_input):
     weights = dict(
         input=hook_input['model'].core.weight_ih_l0.data.numpy(),
@@ -677,6 +835,7 @@ def hook_plot_model_weights(hook_input):
             cmap='RdBu_r',
             square=True,
             ax=ax,
+            center=0,
             vmin=-0.5,
             vmax=0.5,
             cbar_ax=axes[-1],
@@ -702,7 +861,7 @@ def hook_plot_model_weights_gradients(hook_input):
 
     fig, ax = plt.subplots(figsize=(8, 8))
     ax = sns.heatmap(recurrent_weight_grad, cmap='RdBu_r', square=True,
-                     vmin=-0.1, vmax=0.1,
+                     center=0, vmin=-0.1, vmax=0.1,
                      cbar_kws={'label': 'Gradient Value'})
     fig.suptitle('Recurrent Weight Matrix Gradients')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
@@ -715,74 +874,6 @@ def hook_plot_model_weights_gradients(hook_input):
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)
-
-
-def hook_plot_psychometric_curves(hook_input):
-    session_data = hook_input['session_data']
-
-    # fig, ax = plt.subplots(figsize=(12, 8))
-    # fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    # fig.suptitle('Psychometric Curves')
-    # ax.set_xlabel('Stimulus Strength')
-    # ax.set_ylabel('P(Left Action)')
-    # ax.set_xlim([-0.1, 1.6])
-
-    fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    # fig, ax = plt.subplots(figsize=(12, 8), projection='3d')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    ax.scatter(session_data[session_data.block_side == 1].left_stimulus,
-               session_data[session_data.block_side == 1].right_stimulus,
-               session_data[session_data.block_side == 1].right_action_prob)
-    ax.set_xlabel('Left Stimulus')
-    ax.set_ylabel('Right Stimulus')
-    ax.set_zlabel('P(Right Action | Right Block)')
-    hook_input['tensorboard_writer'].add_figure(
-        tag='psychometric_curves_right',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
-
-    fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    ax.scatter(session_data[session_data.block_side == -1].left_stimulus,
-               session_data[session_data.block_side == -1].right_stimulus,
-               session_data[session_data.block_side == -1].left_action_prob)
-    ax.set_xlabel('Left Stimulus')
-    ax.set_ylabel('Right Stimulus')
-    ax.set_zlabel('P(Left Action | Left Block)')
-    hook_input['tensorboard_writer'].add_figure(
-        tag='psychometric_curves_left',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
-
-    # for block_side, block_side_session_data in session_data.groupby('block_side'):
-    #     avg_correct_action_prob_by_stim_strength_by_block_side = block_side_session_data.groupby(
-    #         ['stimulus_strength'])['left_action_prob'].mean()
-    #     sem_correct_action_prob_by_stim_strength_by_block_side = block_side_session_data.groupby(
-    #         ['stimulus_strength'])['left_action_prob'].sem()
-    #     print(avg_correct_action_prob_by_stim_strength_by_block_side)
-    #
-    #     ax.plot(avg_correct_action_prob_by_stim_strength_by_block_side.index.values,
-    #             avg_correct_action_prob_by_stim_strength_by_block_side,
-    #             label=side_string_map[block_side] + ' Block')
-    #
-    #     fill_range = sem_correct_action_prob_by_stim_strength_by_block_side
-    #     ax.fill_between(
-    #         avg_correct_action_prob_by_stim_strength_by_block_side.index.values,
-    #         avg_correct_action_prob_by_stim_strength_by_block_side - fill_range,
-    #         avg_correct_action_prob_by_stim_strength_by_block_side + fill_range,
-    #         alpha=0.5,
-    #         linewidth=0)
-    # ax.legend(numpoints=1, loc='best')
-    # plt.show()
-    # hook_input['tensorboard_writer'].add_figure(
-    #     tag='psychometric_curves',
-    #     figure=fig,
-    #     global_step=hook_input['grad_step'],
-    #     close=True)
 
 
 def hook_plot_psytrack_fit(hook_input):
@@ -884,11 +975,56 @@ def hook_plot_psytrack_fit(hook_input):
         close=True)
 
 
-def hook_plot_within_block_data(hook_input):
-    raise NotImplementedError
+def hook_plot_task_stimuli_by_block_side(hook_input):
+    session_data = hook_input['session_data']
+
+    fig, axes = plt.subplots(nrows=2, figsize=(10, 8))
+
+    for i, block_side in enumerate(session_data.block_side.unique()):
+        ax = axes[i]
+        ax.set_title(f'{side_string_map[block_side]} Block')
+        block_side_session_data = session_data[session_data.block_side == block_side]
+        ax.hist(block_side_session_data.left_stimulus, bins=50, label='Left Stimulus', alpha=0.5)
+        ax.hist(block_side_session_data.right_stimulus, bins=50, label='Right Stimulus', alpha=0.5)
+        ax.legend()
+
+    # add x label to lowest row
+    ax.set_xlabel('Stimulus Value')
+    hook_input['tensorboard_writer'].add_figure(
+        tag='task_stimuli_by_block_side',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
 
 
-def hook_plot_within_trial_stimuli_and_model_prob(hook_input):
+def hook_plot_task_stimuli_by_correct_trial_side(hook_input):
+    session_data = hook_input['session_data']
+    correct_side_stimuli = pd.concat(
+        (session_data.right_stimulus[session_data.trial_side == 1],
+         session_data.left_stimulus[session_data.trial_side == -1]),
+        axis=0)
+    incorrect_side_stimuli = pd.concat(
+        (session_data.right_stimulus[session_data.trial_side == -1],
+         session_data.left_stimulus[session_data.trial_side == 1]),
+        axis=0)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    ax.set_xlabel('Sampled Stimuli')
+    ax.axvline(0, color='k')
+    ax.axhline(0, color='k')
+    ax.scatter(correct_side_stimuli, incorrect_side_stimuli, alpha=0.5)
+    ax.axvline(correct_side_stimuli.mean())
+    ax.axhline(incorrect_side_stimuli.mean())
+    ax.set_xlabel('Correct Side Stimuli')
+    ax.set_ylabel('Incorrect Side Stimuli')
+    hook_input['tensorboard_writer'].add_figure(
+        tag='task_stimuli_by_correct_trial_side',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True)
+
+
+def hook_plot_task_stimuli_and_model_prob_in_first_n_trials(hook_input):
     session_data = hook_input['session_data']
 
     nrows = 5
@@ -930,13 +1066,10 @@ def hook_plot_within_trial_stimuli_and_model_prob(hook_input):
     # add x label to lowest row
     ax.set_xlabel('RNN Step In Trial')
     hook_input['tensorboard_writer'].add_figure(
-        tag='within_trial_data',
+        tag='task_stimuli_and_model_prob_in_first_n_trials',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True)
-
-
-rotation_matrix = np.array([[0, -1], [1, 0]])
 
 
 def add_pca_readout_vectors_to_axis(ax, hook_input):
@@ -951,7 +1084,7 @@ def add_pca_readout_vectors_to_axis(ax, hook_input):
                  head_width=0.16)
 
         # calculate perpendicular hyperplane
-        hyperplane = np.matmul(rotation_matrix, hook_input['pca_readout_weights'][i])
+        hyperplane = np.matmul(rotation_matrix_90, hook_input['pca_readout_weights'][i])
         np.testing.assert_almost_equal(actual=np.dot(hyperplane, hook_input['pca_readout_weights'][i]),
                                        desired=0.)
         # scale hyperplane to ensure it covers entire plot

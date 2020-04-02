@@ -71,7 +71,7 @@ def train_model(model,
         run_envs_output = run_envs(
             model=model,
             envs=envs)
-        run_envs_output['avg_loss'].backward()
+        run_envs_output['avg_loss_per_dt'].backward()
         optimizer.step()
 
         if grad_step in hook_fns:
@@ -97,10 +97,10 @@ def train_model(model,
                 num_grad_steps=50)
 
             hook_input = dict(
-                avg_correct_action_prob=run_envs_output['avg_correct_action_prob'],
-                avg_loss=run_envs_output['avg_loss'].item(),
-                avg_reward=run_envs_output['avg_reward'].item(),
-                avg_rnn_steps_per_trial=run_envs_output['avg_rnn_steps_per_trial'],
+                avg_reward_per_trial=run_envs_output['avg_reward_per_trial'].item(),
+                avg_loss_per_dt=run_envs_output['avg_loss_per_dt'].item(),
+                avg_dts_per_trial=run_envs_output['avg_dts_per_trial'],
+                avg_correct_action_prob_on_last_dt=run_envs_output['avg_correct_action_prob_on_last_dt'],
                 session_data=run_envs_output['session_data'],
                 hidden_states=hidden_states,
                 grad_step=grad_step,
