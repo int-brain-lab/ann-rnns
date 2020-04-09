@@ -1,4 +1,6 @@
 import community
+from itertools import product
+import pandas as pd
 import networkx as nx
 import networkx.algorithms.community
 import networkx.drawing
@@ -13,6 +15,17 @@ import torch.optim
 
 from utils.env import create_custom_worlds
 from utils.run import run_envs
+
+
+possible_stimuli = torch.DoubleTensor(
+    [[2.2, 0.2],
+     [0.2, 0.2],
+     [0.2, 2.2]])
+
+possible_feedback = torch.DoubleTensor(
+    [[-1],
+     [0],
+     [1]])
 
 
 # def extract_eigenvalues_pca(matrix):
@@ -125,7 +138,7 @@ def compute_jacobians_by_side_by_stimuli(model,
             model_forward_output = run_model_one_step(
                 model=model,
                 stimulus=stimuli,
-                rewards=rewards,
+                feedback=rewards,
                 hidden_states=hidden_states)
 
             for str_inputs in ['hidden', 'stimuli', 'rewards']:
@@ -203,7 +216,6 @@ def compute_model_fixed_points(model,
     # reshape to (num trials, num layers * hidden dimension)
 
     # identify non-first block indices
-    possible_stimuli = torch.from_numpy(np.array([[1.2, 0.2], [0.2, 0.2], [0.2, 1.2]]))
     fixed_points_by_side_by_stimuli = {}
     for side, session_data_block_side in session_data.groupby('block_side'):
         fixed_points_by_side_by_stimuli[side] = dict()
@@ -228,7 +240,7 @@ def compute_model_fixed_points(model,
                 model_forward_output = run_model_one_step(
                     model=model,
                     stimulus=stimuli,
-                    rewards=rewards,
+                    feedback=rewards,
                     hidden_states=final_sampled_hidden_states)
                 # non-LSTM shape: (session size, 1 time step, hidden state size)
                 # LSTM shape: (session size, 1 time step, hidden state size, 2)
@@ -327,81 +339,104 @@ def compute_psytrack_fit(session_data):
     return psytrack_fit_output
 
 
-def compute_vector_field_by_trial_side_by_stimuli(model,
-                                                  session_data,
-                                                  hidden_states,
-                                                  pca,
-                                                  pca_hidden_states):
+def compute_model_hidden_state_vector_field(model,
+                                            session_data,
+                                            hidden_states,
+                                            pca,
+                                            pca_hidden_states):
 
-    # identify non-first block indices
-    possible_stimuli = torch.from_numpy(np.array([[1.2, 0.2], [0.2, 0.2], [0.2, 1.2]]))
+    columns = [
+        'session_data_indices',
+        'rnn_step_within_session',
+        'block_index',
+        'trial_index',
+        'rnn_step_index',
+        'block_side',
+        'trial_side',
+        'stimulus_strength',
+        'left_stimulus',
+        'right_stimulus',
+        'reward',
+        'correct_action_prob',
+        'left_action_prob',
+        'right_action_prob',
+        'hidden_state',
+        'pca_hidden_state',
+        'next_hidden_state',
+        'pca_next_hidden_state',
+        'hidden_state_difference']
 
-    vector_fields_by_trial_side_by_stimuli = {}
-    for trial_side, trial_side_session_data in session_data.groupby('trial_side'):
+    vector_fields_df = pd.DataFrame(
+        columns=columns,
+        dtype=np.float16)
 
-        vector_fields_by_trial_side_by_stimuli[trial_side] = dict()
+    # enable storing hidden states in the dataframe.
+    # need to make the column have type object to doing so possible
+    for column in ['hidden_state', 'pca_hidden_state', 'next_hidden_state',
+                   'pca_next_hidden_state', 'hidden_state_difference']:
+        vector_fields_df[column] = vector_fields_df[column].astype(object)
 
-        for possible_stimulus in possible_stimuli:
+    # sample subset of indices
+    random_subset_indices = np.random.choice(
+        session_data.index,
+        replace=False,
+        size=min(1000, len(session_data)))
 
-            # sample subset of indices
-            random_subset_indices = np.random.choice(
-                trial_side_session_data.index,
-                replace=False,
-                size=min(150, len(trial_side_session_data)))
+    sampled_hidden_states = hidden_states[random_subset_indices]
+    sampled_pca_hidden_states = pca_hidden_states[random_subset_indices]
 
-            sampled_hidden_states = hidden_states[random_subset_indices]
-            sampled_pca_hidden_states = pca_hidden_states[random_subset_indices]
+    for feedback, stimulus in product(possible_feedback, possible_stimuli):
 
-            rewards = torch.from_numpy(
-                session_data.iloc[random_subset_indices]['reward'].to_numpy()).reshape(-1, 1)
+        # shape: (len(random subset indices, 1)
+        feedback = torch.stack(len(random_subset_indices) * [feedback], dim=0)
 
-            # shape: (len(session_data_, 1, 2)
-            stimuli = torch.stack(len(random_subset_indices) * [possible_stimulus], dim=0).unsqueeze(1)
+        # shape: (len(random subset indices), 1, 2)
+        stimulus = torch.stack(len(random_subset_indices) * [stimulus], dim=0).unsqueeze(1)
 
-            model_forward_output = run_model_one_step(
-                model=model,
-                stimulus=stimuli,
-                rewards=rewards,
-                hidden_states=torch.from_numpy(sampled_hidden_states))
+        model_forward_output = run_model_one_step(
+            model=model,
+            stimulus=stimulus,
+            feedback=feedback,
+            hidden_states=torch.from_numpy(sampled_hidden_states))
 
-            sampled_next_hidden_states = model_forward_output['core_hidden'].detach().numpy()
+        next_sampled_hidden_states = model_forward_output['core_hidden'].detach().numpy()
 
-            next_sampled_pca_hidden_states = pca.transform(
-                sampled_next_hidden_states.reshape(len(random_subset_indices), -1))
+        next_sampled_pca_hidden_states = pca.transform(
+            next_sampled_hidden_states.reshape(len(random_subset_indices), -1))
 
-            displacement_vector = next_sampled_pca_hidden_states - sampled_pca_hidden_states
+        displacement_vector = next_sampled_pca_hidden_states - sampled_pca_hidden_states
 
-            key = 'left={}, right={}'.format(
-                possible_stimulus[0].item(),
-                possible_stimulus[1].item())
+        vector_fields_subrows_df = dict(
+            displacement_vector=displacement_vector,
+            random_subset_indices=random_subset_indices,
+            sampled_hidden_states=sampled_hidden_states,
+            sampled_pca_hidden_states=sampled_pca_hidden_states,
+            next_sampled_hidden_states=next_sampled_hidden_states,
+            next_sampled_pca_hidden_states=next_sampled_pca_hidden_states)
 
-            vector_fields_by_trial_side_by_stimuli[trial_side][key] = dict(
-                displacement_vector=displacement_vector,
-                random_subset_indices=random_subset_indices,
-                sampled_hidden_states=sampled_hidden_states,
-                sampled_pca_hidden_states=sampled_pca_hidden_states,
-                next_sampled_hidden_states=sampled_next_hidden_states,
-                next_sampled_pca_hidden_states=next_sampled_pca_hidden_states)
+        vector_fields_subrows_df = pd.DataFrame(vector_fields_subrows_df)
 
-    return vector_fields_by_trial_side_by_stimuli
+        vector_fields_df = pd.concat((vector_fields_df, vector_fields_subrows_df))
+
+    return vector_fields_df
 
 
 def run_model_one_step(model,
                        stimulus,
-                       rewards,
+                       feedback,
                        hidden_states=None):
 
     """
 
     :param model:
-    :param stimulus: shape ()
-    :param rewards:
+    :param stimulus: shape (batch size, num steps, stimulus dimension)
+    :param feedback: shape (batch size, num_steps, )
     :param hidden_states:
     :param input_requires_grad:
     :return:
     """
 
-    rewards = rewards.double()
+    feedback = feedback.double()
     stimulus = stimulus.double()
 
     # set model's hidden states to given hidden states
@@ -421,7 +456,7 @@ def run_model_one_step(model,
     # create single step model input
     model_input = dict(
         stimulus=stimulus,
-        reward=rewards)
+        reward=feedback)
 
     model_forward_output = model(model_input)
 

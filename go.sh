@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -n 2                    # two cores
 #SBATCH --mem=8G
-#SBATCH --time=48:00:00         # total run time limit (HH:MM:SS)
+#SBATCH --time=99:99:99         # total run time limit (HH:MM:SS)
 #SBATCH --mail-user=rylansch
 #SBATCH --mail-type=FAIL
 

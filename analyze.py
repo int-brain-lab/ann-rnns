@@ -13,12 +13,14 @@ def main():
     seed = 1
     set_seed(seed=seed)
 
-    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-03-31 12:07:59.566567'
+    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-04-07 22:10:04.020788'
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
 
-    envs = create_biased_choice_worlds(num_sessions=5)
+    envs = create_biased_choice_worlds(
+        num_sessions=35,
+        blocks_per_session=10)
 
     model, optimizer, grad_step = load_checkpoint(
         train_log_dir=train_log_dir,
@@ -75,19 +77,20 @@ def analyze_model(model,
     variance_explained, frac_variance_explained = compute_eigenvalues_svd(
         matrix=hidden_states.reshape(hidden_states.shape[0], -1))
 
-    fixed_points_by_side_by_stimuli = compute_model_fixed_points(
-        model=model,
-        pca=pca,
-        pca_hidden_states=pca_hidden_states,
-        session_data=run_envs_output['session_data'],
-        hidden_states=hidden_states,
-        num_grad_steps=50)
+    # fixed_points_by_side_by_stimuli = compute_model_fixed_points(
+    #     model=model,
+    #     pca=pca,
+    #     pca_hidden_states=pca_hidden_states,
+    #     session_data=run_envs_output['session_data'],
+    #     hidden_states=hidden_states,
+    #     num_grad_steps=50)
 
     hook_input = dict(
-        avg_reward_per_trial=run_envs_output['avg_reward_per_trial'].item(),
+        feedback_by_dt=run_envs_output['feedback_by_dt'],
         avg_loss_per_dt=run_envs_output['avg_loss_per_dt'].item(),
-        avg_dts_per_trial=run_envs_output['avg_dts_per_trial'],
-        avg_correct_action_prob_on_last_dt=run_envs_output['avg_correct_action_prob_on_last_dt'],
+        dts_by_trial=run_envs_output['dts_by_trial'],
+        action_taken_by_total_trials=run_envs_output['action_taken_by_total_trials'],
+        correct_action_taken_by_action_taken=run_envs_output['correct_action_taken_by_action_taken'],
         session_data=run_envs_output['session_data'],
         hidden_states=hidden_states,
         grad_step=start_grad_step,
@@ -101,7 +104,7 @@ def analyze_model(model,
         pca_xrange=pca_xrange,
         pca_yrange=pca_yrange,
         pca=pca,
-        fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
+        # fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli,
         tensorboard_writer=tensorboard_writer,
         tag_prefix=tag_prefix,
         seed=seed)

@@ -14,7 +14,7 @@ class IBLSession(gym.Env):
     def __init__(self,
                  block_side_probs=((0.8, 0.2), (0.2, 0.8)),
                  possible_trial_strengths=(0., 0.25, 0.5, 0.75, 1.0, 1.25),
-                 possible_trial_strengths_probs=(1/6, 1/6, 1/6, 1/6, 1/6, 1/6),
+                 possible_trial_strengths_probs=(1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6),
                  loss_fn_str='nll',
                  blocks_per_session=10,
                  trials_per_block_param=1 / 50,
@@ -149,15 +149,12 @@ class IBLSession(gym.Env):
         """
 
         # sample number of trials per block, ensuring values are between
-        # [min_trials_per_block, max_trials_per_block]
-        self.num_trials_per_block = [np.random.geometric(p=self.trials_per_block_param)
-                                     for _ in range(self.blocks_per_session)]
-        for i in range(len(self.num_trials_per_block)):
-            num_trials = self.num_trials_per_block[i]
-            if num_trials < self.min_trials_per_block:
-                self.num_trials_per_block[i] = self.min_trials_per_block
-            if num_trials > self.max_trials_per_block:
-                self.num_trials_per_block[i] = self.max_trials_per_block
+        # [min_trials_per_block, max_trials_per_block], resampling otherwise
+        self.num_trials_per_block = []
+        while len(self.num_trials_per_block) < self.blocks_per_session:
+            sample = np.random.geometric(p=self.trials_per_block_param)
+            if self.min_trials_per_block <= sample <= self.max_trials_per_block:
+                self.num_trials_per_block.append(sample)
 
         # create Pandas DataFrame for tracking all session data
         max_rnn_steps_per_session = np.sum(self.num_trials_per_block) * self.max_rnn_steps_per_trial
@@ -168,15 +165,22 @@ class IBLSession(gym.Env):
                    'rnn_step_index',
                    'block_side',
                    'trial_side',
+                   'stimulus_strength',
+                   'trial_start',
+                   'trial_end',
+                   'block_start',
+                   'block_end',
                    'left_stimulus',
                    'right_stimulus',
-                   'stimulus_strength',
                    'loss',
                    'reward',
                    'correct_action_prob',
                    'left_action_prob',
                    'right_action_prob',
-                   'hidden_state']
+                   'hidden_state',
+                   'action_taken',
+                   'action_side',
+                   'correct_action_taken']
 
         self.session_data = pd.DataFrame(
             np.nan,  # initialize all to nan
@@ -225,6 +229,11 @@ class IBLSession(gym.Env):
         # create first observation with shape (2,)
         stimulus = self.stimuli[self.current_block_within_session][
             self.current_trial_within_block, self.current_rnn_step_within_trial]
+
+        # record start of trial, block
+        self.session_data.at[0, 'trial_start'] = 1.
+        self.session_data.at[0, 'block_start'] = 1.
+
         step_output = dict(
             stimulus=stimulus.reshape((1, -1)),  # shape (1 rnn step, 2)
             reward=torch.zeros(1).double().requires_grad_(True),
@@ -247,12 +256,13 @@ class IBLSession(gym.Env):
 
         right_action_prob = model_sigmoid_output[0, 0].item()
         left_action_prob = 1. - right_action_prob
-        correct_action_index = (1 + self.trial_sides[self.current_block_within_session][
-            self.current_trial_within_block, self.current_rnn_step_within_trial]) // 2
+        correct_action = self.trial_sides[self.current_block_within_session][
+            self.current_trial_within_block, self.current_rnn_step_within_trial]
+        correct_action_index = (1 + correct_action) // 2
         correct_action_prob = left_action_prob if correct_action_index.item() == 0 else right_action_prob
 
         # target has shape (batch=1,). Reshape to (1, 1) to match action with shape
-        # (batch = 1, 1)
+        # (batch = 1, 1) for loss function
         loss = self.loss_fn(
             target=correct_action_index.reshape((1, 1)).double(),
             input=model_sigmoid_output)
@@ -311,11 +321,34 @@ class IBLSession(gym.Env):
         # or model made an action i.e. receive a reward/punishment
         if abs(reward.item()) > 0.9:
 
+            # record whether action was taken, which side, and whether it was correct
+            if left_action_prob > 0.9 or right_action_prob > 0.9:
+                self.session_data.at[self.current_rnn_step_within_session - 1,
+                                     'action_taken'] = 1.
+                self.session_data.at[self.current_rnn_step_within_session - 1,
+                                     'correct_action_taken'] = reward == 1
+                self.session_data.at[self.current_rnn_step_within_session - 1,
+                                     'action_side'] = correct_action.item()
+            else:
+                self.session_data.at[self.current_rnn_step_within_session - 1,
+                                     'action_taken'] = 0.
+                self.session_data.at[self.current_rnn_step_within_session - 1,
+                                     'correct_action_taken'] = 0.
+
+            # store that trial is over, new trial has begun
+            self.session_data.at[self.current_rnn_step_within_session - 1, 'trial_end'] = 1.
+            self.session_data.at[self.current_rnn_step_within_session, 'trial_start'] = 1.
+
             self.current_rnn_step_within_trial = 0
             self.current_trial_within_block += 1
 
             # move to next block if finished trials within block
             if self.current_trial_within_block == self.num_trials_per_block[self.current_block_within_session]:
+
+                # store that block is over, new block has begun
+                self.session_data.at[self.current_rnn_step_within_session - 1, 'block_end'] = 1.
+                self.session_data.at[self.current_rnn_step_within_session, 'block_end'] = 1.
+
                 self.current_block_within_session += 1
                 self.current_rnn_step_within_trial = 0
                 self.current_trial_within_block = 0
@@ -346,10 +379,10 @@ class IBLSession(gym.Env):
 
 def create_sessions(kwargs,
                     num_sessions):
-
     def make_session(kwargs):
         def _f():
             return IBLSession(**kwargs)
+
         return _f
 
     envs = VecEnv(make_env_fn=make_session(kwargs=kwargs), num_env=num_sessions)
@@ -369,7 +402,8 @@ def create_training_choice_world(batch_size):
     return training_choice_worlds
 
 
-def create_biased_choice_worlds(num_sessions=11):
+def create_biased_choice_worlds(num_sessions=11,
+                                **kwargs):
     """
     "biased choice world during which visual stimuli have to be actively moved
     by the mouse; left and right stimuli are presented with different probability
@@ -377,19 +411,26 @@ def create_biased_choice_worlds(num_sessions=11):
     """
 
     num_means = 4
-    possible_trial_strengths = tuple(np.linspace(0., 3, num_means))
-    possible_trial_strengths_probs = (1 / num_means, ) * num_means
+    possible_trial_strengths = tuple(np.linspace(0., 3., num_means))
+    possible_trial_strengths_probs = (1 / num_means,) * num_means
 
-    kwargs = dict(
+    default_kwargs = dict(
         block_side_probs=((0.8, 0.2), (0.2, 0.8)),
         trials_per_block_param=1 / 50,  # denominator is the mean
         possible_trial_strengths=possible_trial_strengths,
         possible_trial_strengths_probs=possible_trial_strengths_probs,
-        blocks_per_session=12,
-        min_trials_per_block=40,
+        blocks_per_session=5,
+        min_trials_per_block=20,
         max_trials_per_block=100,
         max_rnn_steps_per_trial=10)
-    sessions = create_sessions(kwargs=kwargs, num_sessions=num_sessions)
+
+    for key, value in kwargs.items():
+        if key in default_kwargs:
+            default_kwargs[key] = value
+        else:
+            raise ValueError('Unknown kwarg: ', str(key))
+
+    sessions = create_sessions(kwargs=default_kwargs, num_sessions=num_sessions)
     return sessions
 
 

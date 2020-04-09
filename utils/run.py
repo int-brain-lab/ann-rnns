@@ -129,34 +129,32 @@ def run_envs(model,
 
     # combine each environment's session data
     session_data = pd.concat([env.session_data for env in envs])
-    # check that no nan rows remain
-    rows_containing_nan = session_data.isnull().any(axis=1)
-    assert rows_containing_nan.sum() == 0
 
-    # reindex, without adding column of old index
-    session_data = session_data.reset_index(drop=True)
+    # drop old repeated indices
+    session_data.reset_index(inplace=True, drop=True)
+
+    session_data['signed_stimulus_strength'] = session_data['stimulus_strength'] * \
+                                               session_data['trial_side']
 
     # write CSV to disk for manual inspection, if curious
     # session_data.to_csv('session_data.csv', index=False)
 
-    # divide by total trials, batch size
-    total_trials = len(session_data.groupby([
-        'session_index', 'block_index', 'trial_index']))
-    avg_reward_per_trial = total_reward / total_trials
     avg_loss_per_dt = total_loss / (total_rnn_steps * len(envs))
-
-    avg_dts_per_trial = session_data.groupby([
+    action_taken_by_total_trials = session_data[
+        session_data.trial_end == 1.].action_taken.mean()
+    correct_action_taken_by_action_taken = session_data[
+        session_data.action_taken == 1.].correct_action_taken.mean()
+    feedback_by_dt = session_data.reward.mean()
+    dts_by_trial = session_data.groupby([
         'session_index', 'block_index', 'trial_index']).size().mean()
-
-    avg_correct_action_prob_on_last_dt = np.mean(session_data.groupby([
-        'session_index', 'block_index', 'trial_index']).last()['correct_action_prob'])
 
     run_envs_output = dict(
         session_data=session_data,
-        avg_reward_per_trial=avg_reward_per_trial,
+        feedback_by_dt=feedback_by_dt,
         avg_loss_per_dt=avg_loss_per_dt,
-        avg_dts_per_trial=avg_dts_per_trial,
-        avg_correct_action_prob_on_last_dt=avg_correct_action_prob_on_last_dt
+        dts_by_trial=dts_by_trial,
+        action_taken_by_total_trials=action_taken_by_total_trials,
+        correct_action_taken_by_action_taken=correct_action_taken_by_action_taken
     )
 
     return run_envs_output
