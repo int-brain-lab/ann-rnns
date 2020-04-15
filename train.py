@@ -22,13 +22,15 @@ def main():
 
     optimizer = create_optimizer(
         model=model,
-        optimizer_str='sgd')
+        optimizer_str='sgd',
+        optimizer_kwargs=dict(lr=0.001,
+                              momentum=0.1))
 
     envs = create_biased_choice_worlds(
         num_sessions=1)
 
     start_grad_step = 0
-    num_grad_steps = 15001
+    num_grad_steps = 5001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,

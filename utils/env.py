@@ -3,7 +3,7 @@ from gym import spaces
 import numpy as np
 import pandas as pd
 import torch
-from torch.nn import BCELoss
+from torch.nn import NLLLoss
 
 from utils.stimuli import create_block_stimuli
 from utils.vec_env import VecEnv
@@ -15,7 +15,6 @@ class IBLSession(gym.Env):
                  block_side_probs=((0.8, 0.2), (0.2, 0.8)),
                  possible_trial_strengths=(0., 0.25, 0.5, 0.75, 1.0, 1.25),
                  possible_trial_strengths_probs=(1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6),
-                 loss_fn_str='nll',
                  blocks_per_session=10,
                  trials_per_block_param=1 / 50,
                  min_trials_per_block=20,
@@ -24,7 +23,6 @@ class IBLSession(gym.Env):
                  time_delay_penalty=0.05):
 
         """
-        :param loss_fn_str:
         :param blocks_per_session:
         :param trials_per_block_param:
         :param max_rnn_steps_per_trial:
@@ -43,13 +41,9 @@ class IBLSession(gym.Env):
         self.action_space = spaces.Discrete(2)  # left or right
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(1,))
         self.reward_range = (0, 1)
-        self.loss_fn_str = loss_fn_str
         self.time_delay_penalty = time_delay_penalty
-        self.loss_fn = self.create_loss_fn(
-            loss_fn_str=loss_fn_str,
-            time_delay_penalty=time_delay_penalty)
-        self.reward_fn = self.create_reward_fn(
-            time_delay_penalty=time_delay_penalty)
+        self.loss_fn = self.create_loss_fn()
+        self.reward_fn = self.create_reward_fn()
         self.description_str = create_description_str(env=self)
 
         # to (re)initialize the following variables, call self.reset()
@@ -61,36 +55,31 @@ class IBLSession(gym.Env):
         self.block_sides = None
         self.losses = None
         self.current_block_within_session = None
+        self.current_trial_within_session = None
         self.current_trial_within_block = None
         self.current_rnn_step_within_trial = None
         self.current_rnn_step_within_session = None
         self.total_num_rnn_steps = None
 
-    @staticmethod
-    def create_loss_fn(loss_fn_str, time_delay_penalty):
+    def create_loss_fn(self):
         """
 
-        :param loss_fn_str: str specifying the desired loss function
         :return: loss_fn:   must have two keyword arguments, target and input
-                            target.shape should be (batch size = 1,)
+                            target.shape should be (batch size = 1, )
+                            target.type should be long (i.e. integer)
                             input.shape should be (batch size = 1, num actions = 2,)
         """
 
-        if loss_fn_str == 'nll':
-            bceloss = BCELoss()
+        nlloss = NLLLoss()
 
-            def loss_fn(target, input):
-                # TODO: adding time delay penalty is currently pointless
-                loss = bceloss(target=target, input=input) + time_delay_penalty
-                return loss
-
-        else:
-            raise NotImplementedError
+        def loss_fn(target, action_probs):
+            # TODO: adding time delay penalty is currently pointless
+            loss = nlloss(target=target, input=action_probs)
+            return loss
 
         return loss_fn
 
-    @staticmethod
-    def create_reward_fn(time_delay_penalty):
+    def create_reward_fn(self):
         """
         :return: reward_fn:   must have two keyword arguments, target and input
                     target.shape should be (batch size = 1,)
@@ -99,13 +88,7 @@ class IBLSession(gym.Env):
 
         def reward_fn(target, input, timeout):
 
-            # max returns (value, index)
-            if input > 1 - input:
-                max_prob = input
-                max_prob_idx = 1
-            else:
-                max_prob = 1 - input
-                max_prob_idx = 0
+            max_prob, max_prob_idx = torch.max(input, dim=1)
 
             if max_prob > 0.9:
                 # for an action to be rewarded, the model must have made the correct choice
@@ -113,10 +96,10 @@ class IBLSession(gym.Env):
                 reward = 2. * (target == max_prob_idx).double() - 1.
             elif timeout:
                 # punish model for timing out
-                reward = torch.zeros(1)[0].fill_(-1).double()
+                reward = torch.zeros(1).fill_(-1).double()
             else:
                 # give 0
-                reward = torch.zeros(1)[0].double()
+                reward = torch.zeros(1).double()
 
             # print(f'target: {target.item()}\t'
             #       f'input: {round(input.item(), 2)}\t'
@@ -160,6 +143,7 @@ class IBLSession(gym.Env):
         max_rnn_steps_per_session = np.sum(self.num_trials_per_block) * self.max_rnn_steps_per_trial
         index = np.arange(max_rnn_steps_per_session)
         columns = ['rnn_step_within_session',
+                   'trial_within_session',
                    'block_index',
                    'trial_index',
                    'rnn_step_index',
@@ -192,6 +176,7 @@ class IBLSession(gym.Env):
         # need to make the column have type object to doing so possible
         self.session_data.hidden_state = self.session_data.hidden_state.astype(object)
 
+        self.current_trial_within_session = 0
         self.current_trial_within_block = 0
         self.current_block_within_session = 0
         self.current_rnn_step_within_trial = 0
@@ -244,34 +229,34 @@ class IBLSession(gym.Env):
         return step_output
 
     def step(self,
-             model_sigmoid_output,
+             model_prob_output,
              model_hidden,
              model):
         """
 
-        :param model_sigmoid_output: shape (time step=1, 1)
-        :param model_hidden:
+        :param model_prob_output: shape (time step=1, 2)
+        :param model_hidden: shape (num layers, model hidden size)
         :return:
         """
 
-        right_action_prob = model_sigmoid_output[0, 0].item()
-        left_action_prob = 1. - right_action_prob
+        left_action_prob = model_prob_output[0, 0].item()
+        right_action_prob = model_prob_output[0, 1].item()
         correct_action = self.trial_sides[self.current_block_within_session][
             self.current_trial_within_block, self.current_rnn_step_within_trial]
         correct_action_index = (1 + correct_action) // 2
-        correct_action_prob = left_action_prob if correct_action_index.item() == 0 else right_action_prob
+        correct_action_prob = left_action_prob if correct_action.item() == -1 else right_action_prob
 
         # target has shape (batch=1,). Reshape to (1, 1) to match action with shape
         # (batch = 1, 1) for loss function
         loss = self.loss_fn(
-            target=correct_action_index.reshape((1, 1)).double(),
-            input=model_sigmoid_output)
+            target=correct_action_index.reshape((1,)).long(),
+            action_probs=model_prob_output)
         self.losses[self.current_rnn_step_within_session] = loss
 
         timeout = (self.current_rnn_step_within_trial + 1) == self.max_rnn_steps_per_trial
         reward = self.reward_fn(
             target=correct_action_index,
-            input=model_sigmoid_output,
+            input=model_prob_output,
             timeout=timeout)
 
         # if RNN or GRU, shape = (number of layers, hidden state size)
@@ -291,6 +276,7 @@ class IBLSession(gym.Env):
         block_side = self.block_sides[self.current_block_within_session][
             self.current_trial_within_block, self.current_rnn_step_within_trial].item()
         timestep_data = dict(
+            trial_within_session=self.current_trial_within_session,
             block_index=self.current_block_within_session,
             trial_index=self.current_trial_within_block,
             rnn_step_index=self.current_rnn_step_within_trial,
@@ -334,6 +320,8 @@ class IBLSession(gym.Env):
                                      'action_taken'] = 0.
                 self.session_data.at[self.current_rnn_step_within_session - 1,
                                      'correct_action_taken'] = 0.
+
+            self.current_trial_within_session += 1
 
             # store that trial is over, new trial has begun
             self.session_data.at[self.current_rnn_step_within_session - 1, 'trial_end'] = 1.
@@ -410,8 +398,8 @@ def create_biased_choice_worlds(num_sessions=11,
     in blocks of trials."
     """
 
-    num_means = 4
-    possible_trial_strengths = tuple(np.linspace(0., 3., num_means))
+    num_means = 3
+    possible_trial_strengths = tuple(np.linspace(0., 1., num_means))
     possible_trial_strengths_probs = (1 / num_means,) * num_means
 
     default_kwargs = dict(

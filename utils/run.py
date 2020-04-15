@@ -15,7 +15,7 @@ def create_model(model_str=None,
     if model_kwargs is None:
         model_kwargs = dict(
             input_size=3,
-            output_size=1,
+            output_size=2,
             core_kwargs=dict(
                 num_layers=1,
                 hidden_size=50),
@@ -26,20 +26,12 @@ def create_model(model_str=None,
                 readout_mask='none',
             ))
 
-    # model = create_model(
-    #     model_str='ff',
-    #     model_kwargs=dict(ff_kwargs=dict(activation_str='relu',
-    #                                      layer_widths=[10, 10])))
-
     if model_str in {'rnn', 'lstm', 'gru'}:
         model = RecurrentModel(
             model_str=model_str,
             model_kwargs=model_kwargs)
     elif model_str in {'ff'}:
         raise NotImplementedError
-        # model = FeedforwardModel(
-        #     model_str=model_str,
-        #     model_kwargs=model_kwargs)
     else:
         raise NotImplementedError(f'Unknown core_str: {model_str}')
 
@@ -48,10 +40,9 @@ def create_model(model_str=None,
 
 def create_optimizer(model,
                      optimizer_str='sgd',
-                     optimizer_kwargs=None,
-                     lr=0.01):
+                     optimizer_kwargs=None):
     if optimizer_kwargs is None:
-        optimizer_kwargs = {}
+        optimizer_kwargs = dict(lr=0.0001)
 
     if optimizer_str == 'sgd':
         optimizer_constructor = torch.optim.SGD
@@ -64,10 +55,38 @@ def create_optimizer(model,
 
     optimizer = optimizer_constructor(
         params=model.parameters(),
-        lr=lr,
         **optimizer_kwargs)
 
     return optimizer
+
+
+def extract_session_data(envs):
+
+    # combine each environment's session data
+    session_data = pd.concat([env.session_data for env in envs])
+
+    # drop old repeated indices
+    session_data.reset_index(inplace=True, drop=True)
+
+    # calculate signed stimulus strength
+    session_data['signed_stimulus_strength'] = session_data['stimulus_strength'] * \
+                                               session_data['trial_side']
+
+    # calculate N back errors
+    trial_end_data = session_data[session_data.trial_end == 1]
+    N = 3
+    for n in range(1, N+1):
+        col_name = f'{n}_back_correct'
+        session_data[col_name] = 0
+        n_back_correct_action_taken = trial_end_data.shift(
+            periods=n).correct_action_taken
+        session_data.loc[n_back_correct_action_taken.index.values, col_name] = \
+            n_back_correct_action_taken
+
+    # write CSV to disk for manual inspection, if curious
+    # session_data.to_csv('session_data.csv', index=False)
+
+    return session_data
 
 
 def load_checkpoint(train_log_dir,
@@ -118,7 +137,7 @@ def run_envs(model,
 
         # squeeze to remove the timestep (i.e. middle dimension) for the environment
         step_output = envs.step(
-            actions=model_output['sigmoid_output'],
+            actions=model_output['prob_output'],
             core_hidden=model_output['core_hidden'],
             model=model)
 
@@ -128,16 +147,7 @@ def run_envs(model,
     total_rnn_steps = envs[0].current_rnn_step_within_session
 
     # combine each environment's session data
-    session_data = pd.concat([env.session_data for env in envs])
-
-    # drop old repeated indices
-    session_data.reset_index(inplace=True, drop=True)
-
-    session_data['signed_stimulus_strength'] = session_data['stimulus_strength'] * \
-                                               session_data['trial_side']
-
-    # write CSV to disk for manual inspection, if curious
-    # session_data.to_csv('session_data.csv', index=False)
+    session_data = extract_session_data(envs=envs)
 
     avg_loss_per_dt = total_loss / (total_rnn_steps * len(envs))
     action_taken_by_total_trials = session_data[

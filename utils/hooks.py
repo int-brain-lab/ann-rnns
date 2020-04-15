@@ -80,30 +80,33 @@ def create_hook_fns_analyze(start_grad_step):
 
 def create_hook_fns_train(start_grad_step,
                           num_grad_steps):
+
+    plot_freq = 250
+
     hook_fns_frequencies = [
         (0, hook_log_args),
         (50, hook_print_model_progress),
         (50, hook_write_scalars),
-        (250, utils.plot.hook_plot_task_stimuli_by_block_side),
-        (250, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),
-        (250, utils.plot.hook_plot_task_stimuli_and_model_prob_in_first_n_trials),
-        (250, utils.plot.hook_plot_fraction_var_explained),
+        (plot_freq, utils.plot.hook_plot_task_stimuli_by_block_side),
+        (plot_freq, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),
+        (plot_freq, utils.plot.hook_plot_task_stimuli_and_model_prob_in_first_n_trials),
+        (plot_freq, utils.plot.hook_plot_fraction_var_explained),
         # (50, utils.plot.hook_plot_model_community_detection),
-        (250, utils.plot.hook_plot_behav_dts_per_trial_by_stimuli_strength),
-        (250, utils.plot.hook_plot_behav_prob_correct_action_by_trial_within_block),
-        (250, utils.plot.hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_stimulus_strength),
-        (250, utils.plot.hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration),
-        (250, utils.plot.hook_plot_behav_right_action_by_signed_contrast),
-        (250, utils.plot.hook_plot_behav_trial_outcome_by_stimulus_strength),
+        (plot_freq, utils.plot.hook_plot_behav_dts_per_trial_by_stimuli_strength),
+        (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_by_trial_within_block),
+        (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_stimulus_strength),
+        (plot_freq, utils.plot.hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration),
+        (plot_freq, utils.plot.hook_plot_behav_right_action_by_signed_contrast),
+        (plot_freq, utils.plot.hook_plot_behav_trial_outcome_by_stimulus_strength),
         # (50, utils.plot.hook_plot_model_weights),
         # (10, utils.plot.hook_plot_model_weights_gradients),
-        (250, utils.plot.hook_plot_model_hidden_unit_correlations),
+        (plot_freq, utils.plot.hook_plot_model_hidden_unit_correlations),
         # (10, utils.plot.hook_plot_pca_hidden_state_activity_within_block),
-        # (250, utils.plot.hook_plot_pca_hidden_state_vector_fields),
-        (250, utils.plot.hook_plot_state_space_trajectories_within_trial),
-        (250, utils.plot.hook_plot_state_space_trajectories_within_block),
+        # (plot_freq, utils.plot.hook_plot_pca_hidden_state_vector_fields),
+        (plot_freq, utils.plot.hook_plot_state_space_trajectories_within_trial),
+        (plot_freq, utils.plot.hook_plot_state_space_trajectories_within_block),
         # (10, utils.plot.hook_plot_hidden_state_projected_trajectories_controlled),
-        # (250, utils.plot.hook_plot_pca_hidden_state_fixed_points),
+        # (plot_freq, utils.plot.hook_plot_pca_hidden_state_fixed_points),
         # (10, utils.plot.hook_plot_psytrack_fit),
         # (10, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
         (5000, hook_save_model),
@@ -122,7 +125,6 @@ def hook_log_args(hook_input):
         model_str=hook_input['model'].model_str,
         model_kwargs=hook_input['model'].model_kwargs,
         batch_size=len(hook_input['envs']),
-        env_loss_fn_str=hook_input['envs'][0].loss_fn_str,
         blocks_per_session=hook_input['envs'][0].blocks_per_session,
         trials_per_block_param=hook_input['envs'][0].trials_per_block_param,
         min_trials_per_block=hook_input['envs'][0].min_trials_per_block,
@@ -133,6 +135,7 @@ def hook_log_args(hook_input):
         block_side_probs=hook_input['envs'][0].block_side_probs,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty,
         seed=hook_input['seed'],
+        optimizer_defaults=hook_input['optimizer'].defaults
     )
 
     notes_file = os.path.join(

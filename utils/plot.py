@@ -127,6 +127,7 @@ def hook_plot_behav_prob_correct_action_by_trial_within_block(hook_input):
     ax.plot(
         1 + avg_model_correct_action_prob_by_trial_num.index.values,
         avg_model_correct_action_prob_by_trial_num,
+        '-o',
         color=side_color_map['neutral'])
 
     ax.fill_between(
@@ -176,7 +177,7 @@ def hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_stimulus_str
         ax.plot(
             avg_correct_action_prob_by_stim_strength.index,
             avg_correct_action_prob_by_stim_strength,
-            '-' if block_side == trial_side else '--',
+            '-o' if block_side == trial_side else '--o',
             # solid lines for consistent block side, trial side; dotted otherwise
             label=f'{block_side_str} Block, {trial_side_str} Trial',
             color=side_color_map[block_side])
@@ -320,6 +321,7 @@ def hook_plot_behav_right_action_by_signed_contrast(hook_input):
         ax.plot(
             mean_sem_by_signed_stimulus_strength_by_block_side.index.values,
             mean_sem_by_signed_stimulus_strength_by_block_side['mean'],
+            '-o',
             label=side_string_map[block_side] + ' Block',
             color=side_color_map[block_side])
 
@@ -391,9 +393,10 @@ def hook_plot_fraction_var_explained(hook_input):
     fig, ax = plt.subplots(figsize=(4, 3))
     ax.plot(np.arange(1, 1 + len(hook_input['frac_variance_explained'])),
             hook_input['frac_variance_explained'],
-            'bo',
+            'o',
             alpha=0.8,
-            ms=3)
+            ms=3,
+            color=side_color_map['neutral'])
     fig.suptitle('Fraction of Cumulative Variance Explained by Dimension')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     ax.set_xlabel('Dimension Index')
@@ -962,9 +965,9 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     plt.suptitle(f'Model State Space (Projected) Trajectories')
 
-    # select only environment 0, first 12 blocks
+    # select only environment 1, first 12 trials
     subset_session_data = session_data[(session_data['session_index'] == 0) &
-                                       (session_data['block_index'] == 0) &
+                                       (session_data['block_index'] == 1) &
                                        (session_data['trial_index'] < num_cols * num_rows)]
 
     # create possible color range
@@ -978,7 +981,8 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
         row, col = int(trial_index / num_cols), int(trial_index % num_cols)
         ax = axes[row, col]
         trial_side = side_string_map[session_data_by_trial.trial_side.unique()[0]]
-        ax.set_title(f'Trial {int(1 + trial_index)} ({trial_side})')
+        ax.set_title(f'Trial {int(1 + trial_index)} ({trial_side})\n'
+                     f'Correct Action Taken: {bool(session_data_by_trial.tail(1).iloc[0].correct_action_taken)}')
         ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
         ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
         if row == num_rows - 1:
@@ -1293,7 +1297,7 @@ def hook_plot_task_stimuli_and_model_prob_in_first_n_trials(hook_input):
 
 def add_pca_readout_vectors_to_axis(ax, hook_input):
     # add readout vectors for left
-    for i, label in enumerate(['Right Readout']):
+    for i, label in enumerate(['Left Readout']):
         ax.arrow(x=0.,
                  y=0.,
                  dx=2 * hook_input['pca_readout_weights'][i, 0],

@@ -122,6 +122,11 @@ class RecurrentModel(nn.Module):
             out_features=self.output_size,
             bias=True)
 
+        if self.output_size == 1:
+            self.prob_fn = nn.Sigmoid()
+        elif self.output_size == 2:
+            self.prob_fn = nn.Softmax(dim=2)
+
         # converts all weights into doubles i.e. float64
         # this prevents PyTorch from breaking when multiplying float32 * float64
         self.double()
@@ -310,13 +315,17 @@ class RecurrentModel(nn.Module):
         linear_output = self.readout(core_output)
 
         # shape: (batch size, 1, output dim e.g. 1)
-        sigmoid_output = torch.sigmoid(linear_output)
+        prob_output = self.prob_fn(linear_output)
+
+        # if probability function is sigmoid, add 1 - output to get 2D distribution
+        if self.output_size == 1:
+            prob_output = torch.cat([1 - prob_output, prob_output], dim=2)
 
         forward_output = dict(
             core_output=core_output,
             core_hidden=core_hidden,
             linear_output=linear_output,
-            sigmoid_output=sigmoid_output)
+            prob_output=prob_output)
 
         return forward_output
 
