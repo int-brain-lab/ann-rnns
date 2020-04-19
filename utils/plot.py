@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from psytrack.plot.analysisFunctions import makeWeightPlot
 import scipy.cluster.hierarchy as spc
+from scipy.stats import norm
 import seaborn as sns
 
 import utils.analysis
@@ -36,42 +37,181 @@ side_color_map = {
     side_string_map['left']: 'tab:orange',
     'right': 'tab:blue',
     side_string_map['right']: 'tab:blue',
-    'neutral': 'tab:gray'
+    'neutral': 'tab:gray',
+    'correct': 'tab:green',
+    'incorrect': 'tab:red',
+    'timeout': 'tab:purple',
+    'ideal': 'k'
 }
 
 
-def hook_plot_behav_trial_outcome_by_stimulus_strength(hook_input):
+def hook_plot_analysis_psytrack_fit(hook_input):
+    session_data = hook_input['session_data']
 
+    trial_end_data = session_data[session_data.trial_end == 1]
+
+    try:
+        psytrack_fit_output = utils.analysis.compute_psytrack_fit(
+            session_data=trial_end_data)
+    except RuntimeError:
+        # Factor is exactly singular. can occur if model is outputting only one action
+        return
+
+    # if error was encountered, just skip
+    if psytrack_fit_output is None:
+        return
+    wMAP, credibleInt = psytrack_fit_output['wMAP'], psytrack_fit_output['credibleInt']
+
+    # makeWeightPlot(
+    #     wMode=wMAP,
+    #     outData=psytrack_data,
+    #     weights_dict=weights_dict,
+    #     END=len(trial_end_data),
+    #     errorbar=credibleInt,
+    #     perf_plot=True,
+    #     bias_plot=True)
+
+    # create subplots
+    fig, axes = plt.subplots(
+        nrows=4,
+        ncols=1,
+        figsize=(9, 6),
+        sharex=True,
+        gridspec_kw={'height_ratios': [1, 1, 1, 1]})
+
+    num_trials_to_display = 500
+    trial_num = np.arange(num_trials_to_display) + 1
+    fig.suptitle(f'Bernoulli GLM Model (Psytrack by Roy & Pillow) (Num Points={len(trial_end_data)})')
+    axes[3].set_xlabel('Trial Number')
+
+    # plot stimuli values
+    axes[0].plot(
+        trial_num,
+        trial_end_data['stimuli'].values[:num_trials_to_display],
+        label='Stimulus Value')
+    axes[1].set_ylabel('Stimulus Value')
+
+    # plot block structure i.e. preferred side
+    axes[1].plot(
+        trial_num,
+        trial_end_data['stimuli_preferred_sides'].values[:num_trials_to_display],
+        label='Block Preferred Side')
+    axes[1].scatter(
+        trial_num,
+        1.05 * trial_end_data['stimuli_sides'].values[:num_trials_to_display],
+        alpha=0.8,
+        s=1,
+        c='tab:orange',
+        label='Trial Correct Side')
+    axes[1].set_ylabel('Block Preferred Side')
+    axes[1].legend(loc="upper right")
+
+    # plot weight time series
+    stimuli_wMAP, reward_wMAP = wMAP[0, :num_trials_to_display], wMAP[1, :num_trials_to_display]
+    stimuli_interval = credibleInt[0, :num_trials_to_display]
+    reward_interval = credibleInt[1, :num_trials_to_display]
+    axes[2].plot(
+        trial_num,
+        stimuli_wMAP,
+        label='Stimulus Weight',
+    )
+    axes[2].fill_between(
+        trial_num,
+        stimuli_wMAP - 2 * stimuli_interval,
+        stimuli_wMAP + 2 * stimuli_interval,
+        alpha=0.8,
+        linewidth=0)
+    axes[2].set_ylabel('BernGLM Stimulus Weight')
+
+    # add bias timeseries
+    axes[3].plot(
+        trial_num,
+        reward_wMAP,
+        label='Reward Weight')
+    axes[3].fill_between(
+        trial_num,
+        reward_wMAP - 2 * reward_interval,
+        reward_wMAP + 2 * reward_interval,
+        alpha=0.8,
+        linewidth=0)
+    axes[3].set_ylabel('BernGLM Feedback Weight')
+    hook_input['tensorboard_writer'].add_figure(
+        tag='psytrack_fit',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_behav_dts_per_trial_by_stimuli_strength(hook_input):
+    session_data = hook_input['session_data']
+    dts_and_stimuli_strength_by_trial_df = session_data.groupby([
+        'session_index', 'block_index', 'trial_index']).agg({
+        'trial_strength': 'first',
+        'rnn_step_index': 'size'})
+
+    # plot trial number within block (x) vs probability of correct response (y)
+    avg_dts_per_trial = dts_and_stimuli_strength_by_trial_df.groupby(
+        ['trial_strength']).rnn_step_index.mean()
+    sem_dts_per_trial = dts_and_stimuli_strength_by_trial_df.groupby(
+        ['trial_strength']).rnn_step_index.sem()
+    stimuli_strengths = avg_dts_per_trial.index.values
+
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.set_xlabel('Trial Strength')
+    ax.set_ylabel('dts/trial')
+    fig.suptitle('dts/Trial by Trial Stimulus Strength')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    ax.plot(
+        stimuli_strengths,
+        avg_dts_per_trial,
+        color=side_color_map['neutral'])
+    ax.fill_between(
+        x=stimuli_strengths,
+        y1=avg_dts_per_trial - sem_dts_per_trial,
+        y2=avg_dts_per_trial + sem_dts_per_trial,
+        alpha=0.3,
+        linewidth=0,
+        color=side_color_map['neutral'])
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag='behav_dts_per_trial_by_stimuli_strength',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
     session_data = hook_input['session_data']
 
     # keep only last dts in trials
     last_dt_within_trial_data = session_data[session_data.trial_end == 1.]
 
-    trial_outcome_by_stimulus_strength = last_dt_within_trial_data.groupby(['signed_stimulus_strength']).agg({
+    trial_outcome_by_trial_strength = last_dt_within_trial_data.groupby(['signed_trial_strength']).agg({
         'block_index': 'size',  # can use any column to count number of datum in each group
         'action_taken': 'sum',
         'correct_action_taken': 'sum'
     })
 
-    trial_outcome_by_stimulus_strength.rename(
+    trial_outcome_by_trial_strength.rename(
         columns={'block_index': 'num_trials'},
         inplace=True)
 
-    trial_outcome_by_stimulus_strength['timeout'] = \
-        trial_outcome_by_stimulus_strength['num_trials'] - trial_outcome_by_stimulus_strength['action_taken']
+    trial_outcome_by_trial_strength['timeout'] = \
+        trial_outcome_by_trial_strength['num_trials'] - trial_outcome_by_trial_strength['action_taken']
 
-    trial_outcome_by_stimulus_strength['incorrect_action_taken'] = \
-        trial_outcome_by_stimulus_strength['action_taken'] - \
-        trial_outcome_by_stimulus_strength['correct_action_taken']
+    trial_outcome_by_trial_strength['incorrect_action_taken'] = \
+        trial_outcome_by_trial_strength['action_taken'] - \
+        trial_outcome_by_trial_strength['correct_action_taken']
 
     # drop unnecessary columns
-    trial_outcome_by_stimulus_strength.drop(
+    trial_outcome_by_trial_strength.drop(
         columns=['num_trials', 'action_taken'],
         inplace=True)
 
     # divide each row by row sum to get percents
-    trial_outcome_by_stimulus_strength = trial_outcome_by_stimulus_strength.div(
-        trial_outcome_by_stimulus_strength.sum(axis=1), axis=0)
+    trial_outcome_by_trial_strength = trial_outcome_by_trial_strength.div(
+        trial_outcome_by_trial_strength.sum(axis=1), axis=0)
 
     fig, ax = plt.subplots(figsize=(4, 3))
     fig.suptitle('Trial Outcome (%) by Trial Stimulus Strength')
@@ -83,31 +223,117 @@ def hook_plot_behav_trial_outcome_by_stimulus_strength(hook_input):
     width = 0.35
 
     # add stacked percents
-    ax.bar(trial_outcome_by_stimulus_strength.index,
-           trial_outcome_by_stimulus_strength.timeout,
+    ax.bar(trial_outcome_by_trial_strength.index,
+           trial_outcome_by_trial_strength.timeout,
            width=width,
-           label='Timeout')
+           label='Timeout',
+           color=side_color_map['timeout'])
 
-    ax.bar(trial_outcome_by_stimulus_strength.index,
-           trial_outcome_by_stimulus_strength.incorrect_action_taken,
+    ax.bar(trial_outcome_by_trial_strength.index,
+           trial_outcome_by_trial_strength.incorrect_action_taken,
            width=width,
-           bottom=trial_outcome_by_stimulus_strength.timeout,
-           label='Incorrect Action')
+           bottom=trial_outcome_by_trial_strength.timeout,
+           label='Incorrect Action',
+           color=side_color_map['incorrect'])
 
-    ax.bar(trial_outcome_by_stimulus_strength.index,
-           trial_outcome_by_stimulus_strength.correct_action_taken,
+    ax.bar(trial_outcome_by_trial_strength.index,
+           trial_outcome_by_trial_strength.correct_action_taken,
            width=width,
-           bottom=trial_outcome_by_stimulus_strength.timeout +
-                  trial_outcome_by_stimulus_strength.incorrect_action_taken,
-           label='Correct Action')
+           bottom=trial_outcome_by_trial_strength.timeout +
+                  trial_outcome_by_trial_strength.incorrect_action_taken,
+           label='Correct Action',
+           color=side_color_map['correct'])
 
     ax.legend()
 
     hook_input['tensorboard_writer'].add_figure(
-        tag='behav_trial_outcome_by_stimulus_strength',
+        tag='behav_trial_outcome_by_trial_strength',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_behav_prob_correct_action_by_dts_within_trial(hook_input):
+    session_data = hook_input['session_data']
+
+    # keep only last dts in trials
+    trial_end_data = session_data[session_data.trial_end == 1.].copy()
+
+    # subtract the blank dts to correctly count number of observations
+    trial_end_data.rnn_step_index -= hook_input['envs'][0].rnn_steps_before_stimulus - 1
+    trial_end_data.loc[trial_end_data.rnn_step_index < 1, 'rnn_step_index'] = 0.
+
+    avg_model_correct_action_prob_by_num_dts = trial_end_data.groupby(
+        ['rnn_step_index'])['correct_action_taken'].mean()
+    sem_model_correct_action_prob_by_num_dts = trial_end_data.groupby(
+        ['rnn_step_index'])['correct_action_taken'].sem()
+
+    fig, ax = plt.subplots(figsize=(4, 3))
+    fig.suptitle('Correct Action Trials / Total Trials by Number of Stimuli Within Trial')
+    ax.set_xlabel('Number of Stimuli Within Trial')
+    ax.set_ylabel('Correct Action Trials / Total Trials')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    ax.set_ylim([0., 1.05])
+    ax.set_xlim([0., 1 + hook_input['envs'][0].max_stimuli_per_trial])
+
+    dts_per_trial = avg_model_correct_action_prob_by_num_dts.index.values
+    assert np.all(dts_per_trial > -1)
+    ax.plot(
+        dts_per_trial,
+        avg_model_correct_action_prob_by_num_dts,
+        '-o',
+        label='Model',
+        color=side_color_map['correct'])
+
+    ax.fill_between(
+        x=dts_per_trial,
+        y1=avg_model_correct_action_prob_by_num_dts - sem_model_correct_action_prob_by_num_dts,
+        y2=avg_model_correct_action_prob_by_num_dts + sem_model_correct_action_prob_by_num_dts,
+        alpha=0.3,
+        linewidth=0,
+        color=side_color_map['correct'])
+
+    ideal_prob_correct_after_dt_per_trial_weighted = pd.DataFrame(
+        np.nan,  # initialize all to nan
+        index=dts_per_trial,
+        columns=trial_end_data.trial_strength.unique(),
+        dtype=np.float16)
+    for mu, number_of_trials in trial_end_data.groupby(['trial_strength']).size().iteritems():
+        ideal_prob_correct_after_dt_per_trial_given_mu = np.array([
+            1 - norm.cdf(-mu * np.sqrt(dt_per_trial)) if dt_per_trial > 0 else 0.5
+            for dt_per_trial in dts_per_trial])
+        fraction_of_trials = number_of_trials / len(trial_end_data)
+        ideal_prob_correct_after_dt_per_trial_weighted[mu] = fraction_of_trials * \
+                                                             ideal_prob_correct_after_dt_per_trial_given_mu
+
+    # average over possible trial strengths
+    ideal_prob_correct_after_dt_per_trial = ideal_prob_correct_after_dt_per_trial_weighted.sum(axis=1)
+
+    ax.plot(
+        dts_per_trial,
+        ideal_prob_correct_after_dt_per_trial,
+        '-o',
+        label='Ideal P(Correct|Number of Stimuli)',
+        color=side_color_map['ideal'])
+
+    time_delay_penalty = hook_input['envs'][0].time_delay_penalty
+    ideal_reward_rate_after_dt_per_trial = 2 * ideal_prob_correct_after_dt_per_trial - 1
+    ideal_reward_rate_after_dt_per_trial -= (ideal_prob_correct_after_dt_per_trial.index *
+                                             time_delay_penalty)
+
+    ax.plot(
+        dts_per_trial,
+        ideal_reward_rate_after_dt_per_trial,
+        '-d',
+        label=f'Ideal Reward Rate (Delay Penalty: {time_delay_penalty})',
+        color=side_color_map['ideal'])
+
+    ax.legend()
+    hook_input['tensorboard_writer'].add_figure(
+        tag='behav_prob_correct_action_by_dts_per_trial',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_behav_prob_correct_action_by_trial_within_block(hook_input):
@@ -124,6 +350,13 @@ def hook_plot_behav_prob_correct_action_by_trial_within_block(hook_input):
         ['trial_index'])['correct_action_taken'].sem()
 
     fig, ax = plt.subplots(figsize=(4, 3))
+    fig.suptitle('Correct Action Trials / Total Trials by Trial Within Block')
+    ax.set_xlabel('Trial Within Block')
+    ax.set_ylabel('Correct Action Trials / Total Trials')
+    ax.set_ylim([0., 1.05])
+    ax.set_xlim([0., 101.])
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
     ax.plot(
         1 + avg_model_correct_action_prob_by_trial_num.index.values,
         avg_model_correct_action_prob_by_trial_num,
@@ -138,20 +371,14 @@ def hook_plot_behav_prob_correct_action_by_trial_within_block(hook_input):
         linewidth=0,
         color=side_color_map['neutral'])
 
-    ax.set_ylim([0., 1.05])
-    ax.set_xlim([0., 101.])
-    ax.set_xlabel('Trial Within Block')
-    ax.set_ylabel('Correct Action Trials / Total Trials')
-    fig.suptitle('Correct Action Trials / Total Trials by Trial Within Block')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     hook_input['tensorboard_writer'].add_figure(
         tag='behav_prob_correct_action_by_trial_within_block',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_stimulus_strength(hook_input):
+def hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_trial_strength(hook_input):
     session_data = hook_input['session_data']
 
     # keep only last dts in trials
@@ -166,10 +393,10 @@ def hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_stimulus_str
     for (block_side, trial_side), block_side_trial_side_data in last_dt_within_trial_data.groupby([
         'block_side', 'trial_side']):
         avg_correct_action_prob_by_stim_strength = block_side_trial_side_data.groupby(
-            'stimulus_strength')['correct_action_taken'].mean()
+            'trial_strength')['correct_action_taken'].mean()
 
         sem_correct_action_prob_by_stim_strength = block_side_trial_side_data.groupby(
-            'stimulus_strength')['correct_action_taken'].sem()
+            'trial_strength')['correct_action_taken'].sem()
 
         block_side_str = side_string_map[block_side]
         trial_side_str = side_string_map[trial_side]
@@ -191,10 +418,10 @@ def hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_stimulus_str
 
     ax.legend()
     hook_input['tensorboard_writer'].add_figure(
-        tag='behav_prob_correct_action_on_block_side_trial_side_by_stimulus_strength',
+        tag='behav_prob_correct_action_on_block_side_trial_side_by_trial_strength',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration(hook_input):
@@ -286,11 +513,114 @@ def hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration(hook_inp
         tag='behav_prob_correct_slope_intercept_by_prev_block_duration',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_behav_subj_prob_block_switch_by_signed_trial_strength(hook_input):
+    session_data = hook_input['session_data']
+
+    trial_data = pd.DataFrame(
+        columns=['signed_trial_strength',
+                 'left_action_prob',
+                 'reward',
+                 '1_back_correct',
+                 '2_back_correct',
+                 '3_back_correct',
+                 'prev_left_action_prob',
+                 'subjective_block_switch'],
+        dtype=np.float16)
+
+    for session_index, per_session_data in session_data.groupby(['session_index']):
+        # TODO lambda breaks if len(x) < 2
+        trial_data_within_session = per_session_data.groupby(['block_index', 'trial_index']).agg({
+            'signed_trial_strength': 'first',  # arbitrary
+            'left_action_prob': 'first',
+            'reward': 'last',
+            '1_back_correct': 'last',
+            '2_back_correct': 'last',
+            '3_back_correct': 'last'})
+
+        trial_data_within_session['prev_left_action_prob'] = trial_data_within_session.left_action_prob.shift(periods=1)
+
+        # drop rows with no previous action
+        trial_data_within_session = trial_data_within_session[
+            ~pd.isna(trial_data_within_session.prev_left_action_prob)]
+
+        trial_data_within_session['subjective_block_switch'] = (trial_data_within_session.prev_left_action_prob < 0.5) ^ \
+                                                               (trial_data_within_session.left_action_prob < 0.5)
+
+        trial_data = trial_data.append(trial_data_within_session)
+
+    fig, ax = plt.subplots(figsize=(4, 3))
+    fig.suptitle('Subjective P(Block Switch) by Signed Trial Strength')
+    ax.set_ylim([0., 1.])
+    max_trial_strength = max(hook_input['envs'][0].possible_trial_strengths)
+    ax.set_xlim([-max_trial_strength, max_trial_strength])
+    ax.set_xlabel('Signed Trial Strength')
+    ax.set_ylabel('Subjective P(Block Switch)')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    try:
+        mean_prob_block_switch_reward = trial_data[trial_data.reward == 1].groupby(['signed_trial_strength'])[
+            'subjective_block_switch'].mean()
+        ax.plot(
+            mean_prob_block_switch_reward.index.values,
+            mean_prob_block_switch_reward,
+            '-o',
+            linewidth=1,
+            markersize=5,
+            fillstyle='none',
+            label='Reward',
+            color=side_color_map['neutral'])
+    except pd.core.base.DataError:
+        pass
+
+    try:
+        avg_prob_block_switch_1_back = trial_data[
+            (trial_data.reward == -1) & (trial_data['1_back_correct'] == 1)].groupby([
+            'signed_trial_strength'])['subjective_block_switch'].mean()
+        ax.plot(
+            avg_prob_block_switch_1_back.index.values,
+            avg_prob_block_switch_1_back,
+            '-+',
+            linewidth=1,
+            markersize=5,
+            label='1-Back Error',
+            color=side_color_map['neutral'])
+    except pd.core.base.DataError:
+        pass
+
+    try:
+        avg_prob_block_switch_2_back = trial_data[
+            (trial_data.reward == -1) & (trial_data['1_back_correct'] == -1) & (
+                    trial_data['2_back_correct'] == 1)].groupby([
+            'signed_trial_strength'])['subjective_block_switch'].mean()
+        ax.plot(
+            avg_prob_block_switch_2_back.index.values,
+            avg_prob_block_switch_2_back,
+            '-d',
+            linewidth=1,
+            markersize=5,
+            label='2-Back Error',
+            color=side_color_map['neutral'])
+    except pd.core.base.DataError:
+        pass
+
+    ax.legend()
+    hook_input['tensorboard_writer'].add_figure(
+        tag='behav_subj_prob_block_switch_by_signed_trial_strength',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_behav_right_action_after_error_by_right_action_after_correct(hook_input):
+    # TODO: Behavioral paper 4g
+    print(10)
+    pass
 
 
 def hook_plot_behav_right_action_by_signed_contrast(hook_input):
-
     session_data = hook_input['session_data']
 
     # only take consider last dt within a trial
@@ -303,34 +633,33 @@ def hook_plot_behav_right_action_by_signed_contrast(hook_input):
     ax.set_ylabel('Right Action Taken / Total Action Trials')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
-    mean_sem_by_signed_stimulus_strength = action_data.groupby(
-        ['block_side', 'signed_stimulus_strength']).agg(
+    mean_sem_by_signed_trial_strength = action_data.groupby(
+        ['block_side', 'signed_trial_strength']).agg(
         {'action_side': ['mean', 'sem']})['action_side']
 
     # rescale from [-1, -1] to [0, 1]
-    mean_sem_by_signed_stimulus_strength['mean'] = (1 + mean_sem_by_signed_stimulus_strength['mean']) / 2
-    mean_sem_by_signed_stimulus_strength['sem'] = mean_sem_by_signed_stimulus_strength['sem'] / 2
+    mean_sem_by_signed_trial_strength['mean'] = (1 + mean_sem_by_signed_trial_strength['mean']) / 2
+    mean_sem_by_signed_trial_strength['sem'] = mean_sem_by_signed_trial_strength['sem'] / 2
 
     for block_side in action_data['block_side'].unique():
-
         # take cross section of block side
-        mean_sem_by_signed_stimulus_strength_by_block_side = \
-            mean_sem_by_signed_stimulus_strength.xs(block_side)
+        mean_sem_by_signed_trial_strength_by_block_side = \
+            mean_sem_by_signed_trial_strength.xs(block_side)
 
         # plot non-block conditioned
         ax.plot(
-            mean_sem_by_signed_stimulus_strength_by_block_side.index.values,
-            mean_sem_by_signed_stimulus_strength_by_block_side['mean'],
+            mean_sem_by_signed_trial_strength_by_block_side.index.values,
+            mean_sem_by_signed_trial_strength_by_block_side['mean'],
             '-o',
             label=side_string_map[block_side] + ' Block',
             color=side_color_map[block_side])
 
         ax.fill_between(
-            x=mean_sem_by_signed_stimulus_strength_by_block_side.index.values,
-            y1=mean_sem_by_signed_stimulus_strength_by_block_side['mean'] -
-               mean_sem_by_signed_stimulus_strength_by_block_side['sem'],
-            y2=mean_sem_by_signed_stimulus_strength_by_block_side['mean'] +
-               mean_sem_by_signed_stimulus_strength_by_block_side['sem'],
+            x=mean_sem_by_signed_trial_strength_by_block_side.index.values,
+            y1=mean_sem_by_signed_trial_strength_by_block_side['mean'] -
+               mean_sem_by_signed_trial_strength_by_block_side['sem'],
+            y2=mean_sem_by_signed_trial_strength_by_block_side['mean'] +
+               mean_sem_by_signed_trial_strength_by_block_side['sem'],
             alpha=0.3,
             linewidth=0,
             color=side_color_map[block_side])
@@ -340,73 +669,7 @@ def hook_plot_behav_right_action_by_signed_contrast(hook_input):
         tag='behav_rightward_action_by_signed_contrast',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
-
-
-def hook_plot_behav_right_action_after_error_by_right_action_after_correct(hook_input):
-
-    # TODO: Behavioral paper 4g
-
-    pass
-
-
-def hook_plot_behav_dts_per_trial_by_stimuli_strength(hook_input):
-    session_data = hook_input['session_data']
-    dts_and_stimuli_strength_by_trial_df = session_data.groupby([
-        'session_index', 'block_index', 'trial_index']).agg({
-        'stimulus_strength': 'first',
-        'rnn_step_index': 'size'})
-
-    # plot trial number within block (x) vs probability of correct response (y)
-    avg_dts_per_trial = dts_and_stimuli_strength_by_trial_df.groupby(
-        ['stimulus_strength']).rnn_step_index.mean()
-    sem_dts_per_trial = dts_and_stimuli_strength_by_trial_df.groupby(
-        ['stimulus_strength']).rnn_step_index.sem()
-    stimuli_strengths = avg_dts_per_trial.index.values
-
-    fig, ax = plt.subplots(figsize=(4, 3))
-    ax.set_xlabel('Trial Strength')
-    ax.set_ylabel('dts/trial')
-    fig.suptitle('dts/Trial by Trial Stimulus Strength')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-
-    ax.plot(
-        stimuli_strengths,
-        avg_dts_per_trial,
-        color=side_color_map['neutral'])
-    ax.fill_between(
-        x=stimuli_strengths,
-        y1=avg_dts_per_trial - sem_dts_per_trial,
-        y2=avg_dts_per_trial + sem_dts_per_trial,
-        alpha=0.3,
-        linewidth=0,
-        color=side_color_map['neutral'])
-
-    hook_input['tensorboard_writer'].add_figure(
-        tag='behav_dts_per_trial_by_stimuli_strength',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
-
-
-def hook_plot_fraction_var_explained(hook_input):
-    fig, ax = plt.subplots(figsize=(4, 3))
-    ax.plot(np.arange(1, 1 + len(hook_input['frac_variance_explained'])),
-            hook_input['frac_variance_explained'],
-            'o',
-            alpha=0.8,
-            ms=3,
-            color=side_color_map['neutral'])
-    fig.suptitle('Fraction of Cumulative Variance Explained by Dimension')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    ax.set_xlabel('Dimension Index')
-    ax.set_ylabel('Fraction of Cumulative Variance Explained')
-    ax.set_ylim([0., 1.05])
-    hook_input['tensorboard_writer'].add_figure(
-        tag='var_explained_by_dimension',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
@@ -476,7 +739,7 @@ def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
         tag='hidden_to_hidden_jacobian_eigenvalues_complex_plane',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
@@ -541,13 +804,7 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
         tag='hidden_to_hidden_jacobian_time_constants',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
-
-
-# def hook_plot_model_community_detection(hook_input):
-#     utils.analysis.compute_model_weights_community_detection(hook_input['model'])
-#
-#     print(10)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_model_hidden_unit_correlations(hook_input):
@@ -557,38 +814,48 @@ def hook_plot_model_hidden_unit_correlations(hook_input):
 
     # reshape to (num trials, num layers * hidden dimension)
     hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
-    hidden_state_correlations = np.corrcoef(hidden_states.T)
 
+    # construct correlation matrix
+    hidden_states_trial_side_block_side = np.hstack((
+        hidden_states,
+        np.expand_dims(hook_input['session_data'].trial_side.values, 1),
+        np.expand_dims(hook_input['session_data'].block_side.values, 1),
+        np.expand_dims(hook_input['session_data'].reward.values, 1)))
+    hidden_states_trial_side_block_side_correlations = np.corrcoef(hidden_states_trial_side_block_side.T)
     # due to machine error, correlation matrix isn't exactly symmetric (typically has e-16 errors)
     # make it symmetric
-    hidden_state_correlations = (hidden_state_correlations + hidden_state_correlations.T) / 2
+    hidden_states_trial_side_block_side_correlations = (hidden_states_trial_side_block_side_correlations +
+                                                        hidden_states_trial_side_block_side_correlations.T) / 2
+    hidden_state_self_correlations = hidden_states_trial_side_block_side_correlations[:hidden_size, :hidden_size]
+    hidden_state_task_correlations = hidden_states_trial_side_block_side_correlations[:hidden_size, hidden_size:]
 
     # compute pairwise distances
-    pdist = spc.distance.pdist(hidden_state_correlations)
+    pdist = spc.distance.pdist(hidden_state_self_correlations)
     linkage = spc.linkage(pdist, method='complete')
     labels = spc.fcluster(linkage, 0.5 * np.max(pdist), 'distance')
     indices = np.argsort(labels)
 
     fig, axes = plt.subplots(
         nrows=1,
-        ncols=2,
-        figsize=(8, 3))
+        ncols=3,
+        figsize=(8, 3),
+        gridspec_kw={"width_ratios": [1, 1, 0.45]})
     recurrent_mask_str = hook_input['model'].model_kwargs['connectivity_kwargs']['recurrent_mask']
     fig.suptitle(f'Hidden State Correlations & Weights (Recurrent Mask: {recurrent_mask_str})')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
     # plot hidden state correlations
-    sns.heatmap(hidden_state_correlations[indices][:, indices],
+    sns.heatmap(hidden_state_self_correlations[indices][:, indices],
                 cmap='RdBu_r',
                 ax=axes[0],
                 center=0,
                 vmin=-1.,
                 vmax=1.,
                 square=True,
-                xticklabels=indices,
-                yticklabels=indices,
+                xticklabels=indices,  # indices
+                yticklabels=indices,  # indices
                 cbar_kws={'label': 'Correlation', 'shrink': 0.5})
-    axes[0].set_title('Hidden Unit Correlations')
+    axes[0].set_title('Hidden Unit - Hidden Unit Correlations')
     axes[0].set_xlabel('Hidden Unit Number')
     axes[0].set_ylabel('Hidden Unit Number')
     axes[0].set_aspect("equal")  # ensures little squares don't become rectangles
@@ -615,183 +882,115 @@ def hook_plot_model_hidden_unit_correlations(hook_input):
                 cmap='RdBu_r',
                 ax=axes[1],
                 center=0,
-                xticklabels=False,
-                yticklabels=False,
+                xticklabels=indices,
+                yticklabels=indices,
                 square=True,
                 cbar_kws={'label': 'Weight Strength', 'shrink': 0.5})
     axes[1].set_title('Recurrent Weight Strength')
     axes[1].set_xlabel('Hidden Unit Number')
     axes[1].set_ylabel('Hidden Unit Number')
     axes[1].set_aspect("equal")  # ensures little squares don't become rectangles
+
+    # hidden state vs task side, block side correlation
+    sns.heatmap(hidden_state_task_correlations[indices, :],
+                cmap='RdBu_r',
+                ax=axes[2],
+                center=0,
+                xticklabels=['Trial Side', 'Block Side', 'Feedback'],
+                yticklabels=indices,
+                square=True,
+                cbar_kws={'label': 'Correlation', 'shrink': 0.5})
+    axes[2].set_title('Hidden Unit - Task Correlations')
+    axes[2].set_ylabel('Hidden Unit Number')
+
     hook_input['tensorboard_writer'].add_figure(
         tag='model_hidden_unit_correlations',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_model_weights(hook_input):
+def hook_plot_model_hidden_unit_fraction_var_explained(hook_input):
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.plot(np.arange(1, 1 + len(hook_input['frac_variance_explained'])),
+            hook_input['frac_variance_explained'],
+            'o',
+            alpha=0.8,
+            ms=3,
+            color=side_color_map['neutral'])
+    fig.suptitle('Fraction of Cumulative Variance Explained by Dimension')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    ax.set_xlabel('Dimension Index')
+    ax.set_ylabel('Fraction of Cumulative Variance Explained')
+    ax.set_ylim([0., 1.05])
+    hook_input['tensorboard_writer'].add_figure(
+        tag='var_explained_by_dimension',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_model_weights_and_gradients(hook_input):
     weights = dict(
         input=hook_input['model'].core.weight_ih_l0.data.numpy(),
         recurrent=hook_input['model'].core.weight_hh_l0.data.numpy(),
         readout=hook_input['model'].readout.weight.data.numpy().T  # transpose for better plotting
     )
 
-    fig, axes = plt.subplots(nrows=1,
+    if hook_input['tag_prefix'] != 'analyze/':
+        weight_gradients = dict(
+            input=hook_input['model'].core.weight_ih_l0.grad.numpy(),
+            recurrent=hook_input['model'].core.weight_hh_l0.grad.numpy(),
+            readout=hook_input['model'].readout.weight.grad.numpy().T  # transpose for better plotting
+        )
+
+    fig, axes = plt.subplots(nrows=2,
                              ncols=4,  # rows, cols
                              gridspec_kw={"width_ratios": [1, 1, 1, 0.05]},
                              figsize=(9, 6))
     recurrent_mask_str = hook_input['model'].model_kwargs['connectivity_kwargs']['recurrent_mask']
-    fig.suptitle(f'Model Weights (Recurrent Mask: {recurrent_mask_str})')
+    fig.suptitle(f'Model Weights (Recurrent Mask: {recurrent_mask_str}) and Gradients')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
-    for i, (weight_str, weight_matrix) in enumerate(weights.items()):
-        ax = axes[i]
-        ax.set_title(f'{weight_str}')
-        ax.set_aspect("equal")  # ensures little squares don't become rectangles
+    for i, weight_str in enumerate(weights):
+        axes[0, i].set_title(f'{weight_str} Matrix')
         hm = sns.heatmap(
-            weight_matrix,
+            weights[weight_str],
             cmap='RdBu_r',
             square=True,
-            ax=ax,
+            ax=axes[0, i],
             center=0,
             vmin=-0.5,
             vmax=0.5,
-            cbar_ax=axes[-1],
+            cbar_ax=axes[0, -1],
             cbar_kws={'label': 'Weight Strength'})
+        axes[0, i].set_aspect("equal")  # ensures little squares don't become rectangles
+
+        if hook_input['tag_prefix'] != 'analyze/':
+            axes[1, i].set_title(f'{weight_str} Gradient')
+            hm = sns.heatmap(
+                weight_gradients[weight_str],
+                cmap='RdBu_r',
+                square=True,
+                ax=axes[1, i],
+                center=0,
+                vmin=-0.5,
+                vmax=0.5,
+                cbar_ax=axes[1, -1],
+                cbar_kws={'label': 'Weight Strength'})
+            axes[1, i].set_aspect("equal")  # ensures little squares don't become rectangles
 
     hook_input['tensorboard_writer'].add_figure(
-        tag='model_weights',
+        tag='model_weights_and_gradients',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_model_weights_gradients(hook_input):
-    model = hook_input['model']
-    if model.model_str == 'rnn':
-        recurrent_weight_grad = model.core.weight_hh_l0.grad.numpy()
-    elif model.model_str == 'gru':
-        raise NotImplementedError
-    elif model.model_str == 'lstm':
-        raise NotImplementedError
-    else:
-        return
+def hook_plot_model_weights_community_detection(hook_input):
+    utils.analysis.compute_model_weights_community_detection(hook_input['model'])
 
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax = sns.heatmap(recurrent_weight_grad, cmap='RdBu_r', square=True,
-                     center=0, vmin=-0.1, vmax=0.1,
-                     cbar_kws={'label': 'Gradient Value'})
-    fig.suptitle('Recurrent Weight Matrix Gradients')
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    ax.invert_yaxis()
-    ax.set_xlabel('Hidden Unit Number')
-    ax.set_ylabel('Hidden Unit Number')
-    ax.set_aspect("equal")  # ensures little squares don't become rectangles
-    hook_input['tensorboard_writer'].add_figure(
-        tag='recurrent_weight_matrix_gradients',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
-
-
-def hook_plot_psytrack_fit(hook_input):
-    session_data = hook_input['session_data']
-
-    # drop block 1, keep only env 0
-    keep_indices = (session_data['session_index'] == 0) & (session_data['stimuli_block_number'] != 1)
-    subset_session_data = session_data[keep_indices]
-
-    try:
-        psytrack_fit_output = utils.analysis.compute_psytrack_fit(
-            session_data=subset_session_data)
-    except RuntimeError:
-        # Factor is exactly singular. can occur if model is outputting only one action
-        return
-
-    # if error was encountered, just skip
-    if psytrack_fit_output is None:
-        return
-    wMAP, credibleInt = psytrack_fit_output['wMAP'], psytrack_fit_output['credibleInt']
-
-    # makeWeightPlot(
-    #     wMode=wMAP,
-    #     outData=psytrack_data,
-    #     weights_dict=weights_dict,
-    #     END=len(subset_session_data),
-    #     errorbar=credibleInt,
-    #     perf_plot=True,
-    #     bias_plot=True)
-
-    # create subplots
-    fig, axes = plt.subplots(
-        nrows=4,
-        ncols=1,
-        figsize=(9, 6),
-        sharex=True,
-        gridspec_kw={'height_ratios': [1, 1, 1, 1]})
-
-    num_trials_to_display = 500
-    trial_num = np.arange(num_trials_to_display) + 1
-    fig.suptitle(f'Bernoulli GLM Model (Psytrack by Roy & Pillow) (Num Points={len(subset_session_data)})')
-    axes[3].set_xlabel('Trial Number')
-
-    # plot stimuli values
-    axes[0].plot(
-        trial_num,
-        subset_session_data['stimuli'].values[:num_trials_to_display],
-        label='Stimulus Value')
-    axes[1].set_ylabel('Stimulus Value')
-
-    # plot block structure i.e. preferred side
-    axes[1].plot(
-        trial_num,
-        subset_session_data['stimuli_preferred_sides'].values[:num_trials_to_display],
-        label='Block Preferred Side')
-    axes[1].scatter(
-        trial_num,
-        1.05 * subset_session_data['stimuli_sides'].values[:num_trials_to_display],
-        alpha=0.8,
-        s=1,
-        c='tab:orange',
-        label='Trial Correct Side')
-    axes[1].set_ylabel('Block Preferred Side')
-    axes[1].legend(loc="upper right")
-
-    # plot weight time series
-    stimuli_wMAP, reward_wMAP = wMAP[0, :num_trials_to_display], wMAP[1, :num_trials_to_display]
-    stimuli_interval = credibleInt[0, :num_trials_to_display]
-    reward_interval = credibleInt[1, :num_trials_to_display]
-    axes[2].plot(
-        trial_num,
-        stimuli_wMAP,
-        label='Stimulus Weight',
-    )
-    axes[2].fill_between(
-        trial_num,
-        stimuli_wMAP - 2 * stimuli_interval,
-        stimuli_wMAP + 2 * stimuli_interval,
-        alpha=0.8,
-        linewidth=0)
-    axes[2].set_ylabel('BernGLM Stimulus Weight')
-
-    # add bias timeseries
-    axes[3].plot(
-        trial_num,
-        reward_wMAP,
-        label='Reward Weight')
-    axes[3].fill_between(
-        trial_num,
-        reward_wMAP - 2 * reward_interval,
-        reward_wMAP + 2 * reward_interval,
-        alpha=0.8,
-        linewidth=0)
-    axes[3].set_ylabel('BernGLM Reward Weight')
-    hook_input['tensorboard_writer'].add_figure(
-        tag='psytrack_model',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True)
+    print(10)
 
 
 def hook_plot_state_space_fixed_points(hook_input):
@@ -876,10 +1075,10 @@ def hook_plot_state_space_fixed_points(hook_input):
     color_bar = fig.colorbar(sc, cax=ax_colorbar)
     color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
     hook_input['tensorboard_writer'].add_figure(
-        tag='state_space_fixed_points',
+        tag='hook_plot_psytrack_fit',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_state_space_vector_fields(hook_input):
@@ -949,7 +1148,7 @@ def hook_plot_state_space_vector_fields(hook_input):
         tag='state_space_vector_fields',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_state_space_trajectories_within_trial(hook_input):
@@ -1026,7 +1225,7 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
         tag='state_space_trajectories_within_trial',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_state_space_trajectories_within_block(hook_input):
@@ -1094,7 +1293,7 @@ def hook_plot_state_space_trajectories_within_block(hook_input):
         tag='state_space_trajectories_within_block',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_state_space_trajectories_within_block_smooth(hook_input):
@@ -1140,7 +1339,7 @@ def hook_plot_state_space_trajectories_within_block_smooth(hook_input):
         tag='hidden_state_projected_phase_space_trajectories_controlled',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_task_block_side_trial_side_by_trial_number(hook_input):
@@ -1172,7 +1371,7 @@ def hook_plot_task_block_side_trial_side_by_trial_number(hook_input):
         tag='task_block_side_trial_side_by_trial_number',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_task_stimuli_by_block_side(hook_input):
@@ -1204,7 +1403,7 @@ def hook_plot_task_stimuli_by_block_side(hook_input):
         tag='task_stimuli_by_block_side',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_task_stimuli_by_correct_trial_side(hook_input):
@@ -1235,7 +1434,7 @@ def hook_plot_task_stimuli_by_correct_trial_side(hook_input):
         tag='task_stimuli_by_correct_trial_side',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_task_stimuli_and_model_prob_in_first_n_trials(hook_input):
@@ -1262,7 +1461,7 @@ def hook_plot_task_stimuli_and_model_prob_in_first_n_trials(hook_input):
         ax.axhline(0.9, color='k')
         ax.set_xlabel('RNN Step In Trial')
         ax.set_title(f'Trial Side: {side_string_map[trial_data.trial_side.unique()[0]]}\n'
-                     f'Strength: {trial_data.stimulus_strength.unique()[0]}')
+                     f'Strength: {trial_data.trial_strength.unique()[0]}')
         ax.set_xlim(0, hook_input['envs'][0].max_rnn_steps_per_trial)
         ax.plot(
             trial_data.rnn_step_index + 1,
@@ -1292,7 +1491,7 @@ def hook_plot_task_stimuli_and_model_prob_in_first_n_trials(hook_input):
         tag='task_stimuli_and_model_prob_in_first_n_trials',
         figure=fig,
         global_step=hook_input['grad_step'],
-        close=True)
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def add_pca_readout_vectors_to_axis(ax, hook_input):

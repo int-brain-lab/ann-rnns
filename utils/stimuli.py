@@ -65,26 +65,26 @@ def create_block_stimuli(num_trials,
 # TODO: fix this to create Gabor patches as specified
 #
 #     def __init__(self,
-#                  stimulus_strengths=None,
-#                  stimulus_strength_probs=None):
+#                  trial_strengths=None,
+#                  trial_strength_probs=None):
 #
 #         # defaults
-#         if stimulus_strengths is None:
-#             stimulus_strengths = [1, 0.5, 0.25, 0.125, 0.06, 0]
-#         if stimulus_strength_probs is None:
-#             stimulus_strength_probs = [2 / 11, 2 / 11, 2 / 11, 2 / 11, 2 / 11, 1 / 11]
+#         if trial_strengths is None:
+#             trial_strengths = [1, 0.5, 0.25, 0.125, 0.06, 0]
+#         if trial_strength_probs is None:
+#             trial_strength_probs = [2 / 11, 2 / 11, 2 / 11, 2 / 11, 2 / 11, 1 / 11]
 #
 #         super(GratingCreator, self).__init__(
-#             stimulus_strengths=stimulus_strengths,
-#             stimulus_strength_probs=stimulus_strength_probs)
+#             trial_strengths=trial_strengths,
+#             trial_strength_probs=trial_strength_probs)
 #
 #     def create_block_stimuli(self,
 #                              block_num_trials,
 #                              block_side_bias_probabilities):
 #
 #         sampled_strength = np.random.choice(
-#             self.stimulus_strengths,
-#             p=self.stimulus_strength_probs)
+#             self.trial_strengths,
+#             p=self.trial_strength_probs)
 #
 #
 #         if side == 'left':

@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 from torch.utils.tensorboard import SummaryWriter
@@ -6,25 +7,25 @@ from utils.analysis import compute_model_fixed_points, compute_hidden_states_pca
     compute_eigenvalues_svd
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_analyze
-from utils.run import load_checkpoint, run_envs, set_seed
+from utils.run import load_checkpoint, run_envs, set_seed, stitch_plots
 
 
 def main():
     seed = 1
     set_seed(seed=seed)
 
-    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-04-09 01:13:16.774657'
+    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-04-17 18:10:34.411689'
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
 
-    envs = create_biased_choice_worlds(
-        num_sessions=35,
-        blocks_per_session=10)
-
-    model, optimizer, grad_step = load_checkpoint(
+    model, optimizer, grad_step, env_kwargs = load_checkpoint(
         train_log_dir=train_log_dir,
         tensorboard_writer=tensorboard_writer)
+
+    envs = create_biased_choice_worlds(
+        num_sessions=55,
+        **env_kwargs)
 
     hook_fns = create_hook_fns_analyze(
         start_grad_step=grad_step)
@@ -111,6 +112,14 @@ def analyze_model(model,
 
     for hook_fn in hook_fns[start_grad_step]:
         hook_fn(hook_input)
+        fn_name = str(hook_fn).split(' ')[1] + '.jpg'
+        fig = plt.gcf()
+        fig.savefig(os.path.join(tensorboard_writer.log_dir, fn_name))
+        plt.close(fig)
+
+
+
+    stitch_plots(log_dir=tensorboard_writer.log_dir)
 
     return analyze_model_output
 

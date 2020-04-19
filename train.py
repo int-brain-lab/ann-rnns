@@ -30,7 +30,7 @@ def main():
         num_sessions=1)
 
     start_grad_step = 0
-    num_grad_steps = 5001
+    num_grad_steps = 25001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
@@ -58,6 +58,7 @@ def train_model(model,
                 start_grad_step=0,
                 num_grad_steps=150,
                 tag_prefix='train/'):
+
     # sets the model in training mode.
     model.train()
 

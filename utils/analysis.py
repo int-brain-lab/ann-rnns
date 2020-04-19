@@ -9,6 +9,7 @@ from psytrack.helper.invBlkTriDiag import getCredibleInterval
 from psytrack.hyperOpt import hyperOpt
 import re
 from sklearn.decomposition.pca import PCA
+import statsmodels.api as sm
 import torch
 import torch.autograd
 import torch.optim
@@ -39,50 +40,28 @@ possible_feedback = torch.DoubleTensor(
 #     return eigenvalues
 
 
-def compute_model_weights_directed_graph(model):
+def regress_hidden_activity_against_block_side(hook_input):
 
-    weights = dict(
-        input=model.core.weight_ih_l0.data.numpy(),
-        recurrent=model.core.weight_hh_l0.data.numpy(),
-        readout=model.readout.weight.data.numpy()
-    )
+    session_data = hook_input['session_data']
+    hidden_states = hook_input['hidden_states']
 
-    input_num_units = weights['input'].shape[1]
-    recurrent_num_units = weights['recurrent'].shape[0]
-    readout_num_units = weights['readout'].shape[0]
-    total_num_units = input_num_units + recurrent_num_units + readout_num_units
-    total_weight_matrix = np.zeros(shape=(total_num_units, total_num_units))
+    # reshape to (num trials, num layers * hidden dimension)
+    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
 
-    # add weight matrices
-    total_weight_matrix[:input_num_units, input_num_units:input_num_units+recurrent_num_units] = \
-        weights['input'].T
-    total_weight_matrix[input_num_units:input_num_units+recurrent_num_units, input_num_units:input_num_units+recurrent_num_units] = \
-        weights['recurrent'].T
-    total_weight_matrix[input_num_units:input_num_units+recurrent_num_units, input_num_units+recurrent_num_units:] = \
-        weights['readout'].T
+    logistic_regression = sm.Logit(
+        endog=((1+session_data.block_side) / 2).values,
+        exog=hidden_states)
+    result = logistic_regression.fit(maxiter=70)  # default is 35
+    block_readout_weights = result.params
+    pca_block_readout_vector = np.squeeze(
+        hook_input['pca'].transform(np.expand_dims(block_readout_weights, 0)),
+        axis=0)
 
-    model_graph = nx.convert_matrix.from_numpy_matrix(
-        A=total_weight_matrix,
-        create_using=nx.DiGraph)
+    angle_between_block_trial = np.arccos(np.dot(
+        pca_block_readout_vector / np.linalg.norm(pca_block_readout_vector),
+        hook_input['pca_readout_weights'][0, :] / np.linalg.norm(hook_input['pca_readout_weights'][0, :])))
 
-    return model_graph
-
-
-def compute_model_weights_community_detection(model):
-
-    model_weights_directed_graph = compute_model_weights_directed_graph(model=model)
-    model_graph_numpy = nx.to_numpy_array(model_weights_directed_graph)
-    np.save('model_weights_directed_graph.npy', model_graph_numpy)
-    partition = community.best_partition(model_weights_directed_graph)
-
-    networkx.drawing.draw(
-        model_weights_directed_graph,
-        arrows=True)
-
-    import matplotlib.pyplot as plt
-    plt.show()
-
-    print(10)
+    print(angle_between_block_trial * 180 / np.pi)
 
 
 def compute_eigenvalues_svd(matrix):
@@ -188,6 +167,52 @@ def compute_projected_hidden_state_trajectory_controlled(model,
     )
 
     return trajectory_controlled_output
+
+
+def compute_model_weights_directed_graph(model):
+
+    weights = dict(
+        input=model.core.weight_ih_l0.data.numpy(),
+        recurrent=model.core.weight_hh_l0.data.numpy(),
+        readout=model.readout.weight.data.numpy()
+    )
+
+    input_num_units = weights['input'].shape[1]
+    recurrent_num_units = weights['recurrent'].shape[0]
+    readout_num_units = weights['readout'].shape[0]
+    total_num_units = input_num_units + recurrent_num_units + readout_num_units
+    total_weight_matrix = np.zeros(shape=(total_num_units, total_num_units))
+
+    # add weight matrices
+    total_weight_matrix[:input_num_units, input_num_units:input_num_units+recurrent_num_units] = \
+        weights['input'].T
+    total_weight_matrix[input_num_units:input_num_units+recurrent_num_units, input_num_units:input_num_units+recurrent_num_units] = \
+        weights['recurrent'].T
+    total_weight_matrix[input_num_units:input_num_units+recurrent_num_units, input_num_units+recurrent_num_units:] = \
+        weights['readout'].T
+
+    model_graph = nx.convert_matrix.from_numpy_matrix(
+        A=total_weight_matrix,
+        create_using=nx.DiGraph)
+
+    return model_graph
+
+
+def compute_model_weights_community_detection(model):
+
+    model_weights_directed_graph = compute_model_weights_directed_graph(model=model)
+    model_graph_numpy = nx.to_numpy_array(model_weights_directed_graph)
+    np.save('model_weights_directed_graph.npy', model_graph_numpy)
+    partition = community.best_partition(model_weights_directed_graph)
+
+    networkx.drawing.draw(
+        model_weights_directed_graph,
+        arrows=True)
+
+    import matplotlib.pyplot as plt
+    plt.show()
+
+    print(10)
 
 
 def compute_hidden_states_pca(hidden_states,
@@ -353,7 +378,7 @@ def compute_model_hidden_state_vector_field(model,
         'rnn_step_index',
         'block_side',
         'trial_side',
-        'stimulus_strength',
+        'trial_strength',
         'left_stimulus',
         'right_stimulus',
         'reward',
