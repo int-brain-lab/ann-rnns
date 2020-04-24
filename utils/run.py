@@ -10,7 +10,6 @@ from utils.models import RecurrentModel
 
 def create_model(model_str=None,
                  model_kwargs=None):
-
     # defaults
     if model_str is None:
         model_str = 'rnn'
@@ -43,7 +42,6 @@ def create_model(model_str=None,
 def create_optimizer(model,
                      optimizer_str='sgd',
                      optimizer_kwargs=None):
-
     if optimizer_kwargs is None:
         optimizer_kwargs = dict(lr=0.0001)
 
@@ -64,7 +62,6 @@ def create_optimizer(model,
 
 
 def extract_session_data(envs):
-
     # calculate N back errors for each session
     N = 3
     for env in envs:
@@ -87,7 +84,15 @@ def extract_session_data(envs):
 
     # calculate signed stimulus strength
     session_data['signed_trial_strength'] = session_data['trial_strength'] * \
-                                               session_data['trial_side']
+                                            session_data['trial_side']
+
+    # make trial side, block side orthogonal
+    block_sides = session_data.block_side.values
+    trial_sides = session_data.trial_side.values
+    proj_trial_sides_onto_block_sides = np.dot(block_sides, trial_sides) * block_sides \
+                                        / np.dot(block_sides, block_sides)
+    trial_side_orthogonal = trial_sides - proj_trial_sides_onto_block_sides
+    session_data['trial_side_orthogonal'] = trial_side_orthogonal
 
     # write CSV to disk for manual inspection, if curious
     # session_data.to_csv('session_data.csv', index=False)
@@ -97,7 +102,6 @@ def extract_session_data(envs):
 
 def load_checkpoint(train_log_dir,
                     tensorboard_writer):
-
     # collect last checkpoint in the log directory
     checkpoint_paths = [os.path.join(train_log_dir, file_path)
                         for file_path in os.listdir(train_log_dir)
@@ -129,12 +133,14 @@ def load_checkpoint(train_log_dir,
     # remove batch size - will use hard coded constant for larger sample size
     del env_kwargs['batch_size']
 
+    # replace some defaults
+    env_kwargs['blocks_per_session'] = 500
+
     return model, optimizer, global_step, env_kwargs
 
 
 def run_envs(model,
              envs):
-
     total_reward = torch.zeros(1, dtype=torch.double, requires_grad=True)
     total_loss = torch.zeros(1, dtype=torch.double, requires_grad=True)
     if hasattr(model, 'reset_core_hidden'):
@@ -143,7 +149,6 @@ def run_envs(model,
 
     # step until any env finishes
     while not np.any(step_output['done']):
-
         total_reward = total_reward + torch.sum(step_output['reward'])  # cannot use +=
         total_loss = total_loss + torch.sum(step_output['loss'])
 
@@ -194,7 +199,6 @@ def set_seed(seed):
 
 
 def stitch_plots(log_dir):
-
     plot_paths = [os.path.join(log_dir, file_name) for file_name in sorted(os.listdir(log_dir))
                   if file_name.endswith('.jpg') or file_name.endswith('.png')]
 

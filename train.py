@@ -4,8 +4,7 @@ import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.analysis import compute_model_fixed_points, compute_hidden_states_pca, \
-    compute_eigenvalues_svd
+from utils.analysis import compute_eigenvalues_svd
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_train
 from utils.run import create_model, create_optimizer, run_envs, set_seed
@@ -30,7 +29,7 @@ def main():
         num_sessions=1)
 
     start_grad_step = 0
-    num_grad_steps = 25001
+    num_grad_steps = 35001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
@@ -99,6 +98,11 @@ def train_model(model,
                 tensorboard_writer=tensorboard_writer,
                 tag_prefix=tag_prefix,
                 seed=seed)
+
+            eigenvalues_svd_results = compute_eigenvalues_svd(
+                matrix=hook_input['hidden_states'].reshape(hook_input['hidden_states'].shape[0], -1))
+
+            hook_input.update(eigenvalues_svd_results)
 
             for hook_fn in hook_fns[grad_step]:
                 hook_fn(hook_input)
