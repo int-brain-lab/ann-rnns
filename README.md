@@ -1,5 +1,18 @@
 # Fiete Lab - IBL ANN-RNNs Project
 
+### Background
+
+The goal of this project is to answer two questions:
+
+1. How do neurally-plausible mechanistic models solve the IBL task?
+
+2. How can a quantitative, interpretable answer be leveraged to direct 
+exploration and analysis of biological circuit data?
+
+Our approach is to train recurrent neural networks (RNNs) to solve a simplified
+version of the IBL task. Presentations are included as PDFs in `documents/`.
+For a quick taste, see the 2020 April 26th's IBL Annual Meeting Theory Working Group
+presentation.
 
 ### Setup
 After cloning the repository, run `pip3 install -r requirements.txt` to install
