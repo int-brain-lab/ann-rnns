@@ -1251,9 +1251,9 @@ def hook_plot_state_space_trajectories_within_block(hook_input):
 
     num_rows, num_cols = 2, 2
 
-    # select only environment 0, first 12 blocks
-    subset_session_data = session_data[(session_data['session_index'] == 0) &
-                                       (session_data['block_index'] < (num_cols * num_rows))]
+    # select only environment 0, last num_rows * num_cols blocks
+    subset_session_data = session_data[(session_data.session_index == 0) &
+                                       (session_data.block_index > max(session_data.block_index) - num_cols*num_rows)]
     # separate by side bias
     fig, axes = plt.subplots(nrows=num_rows,
                              ncols=num_cols,
@@ -1266,12 +1266,9 @@ def hook_plot_state_space_trajectories_within_block(hook_input):
     # create possible color range
     max_block_duration = max(subset_session_data.groupby(['session_index', 'block_index']).size())
 
-    for block_idx, session_data_by_block in subset_session_data.groupby('block_index'):
+    for i, (block_idx, session_data_by_block) in enumerate(subset_session_data.groupby('block_index')):
 
-        if block_idx >= num_cols * num_rows:
-            break
-
-        row, col = int(block_idx / num_cols), int(block_idx % num_cols)
+        row, col = int(i / num_cols), int(i % num_cols)
         ax = axes[row, col]
         block_side = side_string_map[session_data_by_block.block_side.unique()[0]]
         ax.set_title(f'Block {1 + int(block_idx)}\n{block_side} Block')
@@ -1294,10 +1291,10 @@ def hook_plot_state_space_trajectories_within_block(hook_input):
             ax.plot(
                 proj_hidden_states_block[i:i + 2, 0],
                 proj_hidden_states_block[i:i + 2, 1],
-                marker='o',
+                '-o',
                 color=plt.cm.jet(i / max_block_duration),
-                markersize=5.0,
-                linestyle='None',
+                markersize=2,
+                # linestyle='None',
                 zorder=2)
             # ax.text(
             #     proj_hidden_states_block[i, 0],
@@ -1369,7 +1366,6 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
     session_data = hook_input['session_data']
 
     num_rows, num_cols = 3, 3
-
     # separate by side bias
     fig, axes = plt.subplots(nrows=num_rows,
                              ncols=num_cols,
@@ -1381,7 +1377,7 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
 
     # select only environment 1, first 12 trials
     subset_session_data = session_data[(session_data['session_index'] == 0) &
-                                       (session_data['block_index'] == 10) &
+                                       (session_data['block_index'] == 2) &
                                        (session_data['trial_index'] < num_cols * num_rows)]
 
     # create possible color range
@@ -1399,9 +1395,9 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
         title += 'Correct Action' if bool(session_data_by_trial.tail(1).iloc[0].correct_action_taken) \
             else 'Incorrect Action'
         ax.set_title(title)
-
         ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
         ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+
 
         if row == (num_rows - 1):
             ax.set_xlabel('Principal Component #1')
@@ -1442,7 +1438,6 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
 
         add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
 
-    plt.show()
     # TODO: add colobar without disrupting
     # sm = plt.cm.ScalarMappable(cmap=plt.cm.jet, norm=plt.Normalize(vmin=0, vmax=max_block_duration))
     # color_bar = fig.colorbar(sm, cax=axes[-1])
@@ -1454,57 +1449,55 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_state_space_trials_by_block_side(hook_input):
+def hook_plot_state_space_trials_by_classifier_and_trial_index(hook_input):
     session_data = hook_input['session_data']
 
     # take only last dt within a trial
     # exclude blocks that are first in the session
     trial_end_data = session_data[session_data.trial_end == 1]
 
-    fig, axes = plt.subplots(nrows=2,
-                             ncols=2,
-                             gridspec_kw={"width_ratios": [1] * 2},
+    fig, axes = plt.subplots(nrows=1,
+                             ncols=1,
+                             gridspec_kw={"width_ratios": [1]},
                              figsize=(5, 5))
 
     max_trials_per_block_to_consider = 50
     trial_end_data = trial_end_data[trial_end_data.trial_index < max_trials_per_block_to_consider]
 
     titles = [
-        'Blocks',
-        'Blocks'
+        # 'Colored by Trial Index',
+        'Colored by Classifier'
     ]
 
-    for col, (block_side, session_data_by_block_side) in enumerate(trial_end_data.groupby('block_side')):
-        color_arrays = [
-            plt.cm.jet(session_data_by_block_side.trial_index / max_trials_per_block_to_consider),
-            plt.cm.jet((1. + session_data_by_block_side.classifier_block_side) / 2)
-        ]
-        for row, (color_array, title) in enumerate(zip(color_arrays, titles)):
+    color_arrays = [
+        # plt.cm.jet(trial_end_data.trial_index / max_trials_per_block_to_consider),
+        plt.cm.jet((1. + trial_end_data.classifier_block_side) / 2)
+    ]
 
-            ax = axes[row, col]
-            ax.set_title(f'{side_string_map[block_side]} {title}')
-            ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
-            ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+    for row, (color_array, title) in enumerate(zip(color_arrays, titles)):
+
+        ax = axes
+        # ax = axes[row]
+        ax.set_title(f'{title}')
+        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+        ax.set_xlabel('Principal Component #1')
+        ax.set_ylabel('Principal Component #2')
+        if row == 1:
             ax.set_xlabel('Principal Component #1')
-            if col == 0:
-                ax.set_ylabel('Principal Component #2')
-            else:
-                ax.yaxis.set_ticklabels([])
-            if row == 1:
-                ax.set_xlabel('Principal Component #1')
-            else:
-                ax.xaxis.set_ticklabels([])
+        else:
+            ax.xaxis.set_ticklabels([])
 
-            block_side_trial_end_rows = session_data_by_block_side.index.values
-            block_side_trial_end_proj_hidden_states = hook_input['pca_hidden_states'][block_side_trial_end_rows]
-            ax.scatter(
-                block_side_trial_end_proj_hidden_states[:, 0],
-                block_side_trial_end_proj_hidden_states[:, 1],
-                alpha=0.4,
-                s=3,
-                c=color_array)
+        block_side_trial_end_rows = trial_end_data.index.values
+        block_side_trial_end_proj_hidden_states = hook_input['pca_hidden_states'][block_side_trial_end_rows]
+        ax.scatter(
+            block_side_trial_end_proj_hidden_states[:, 0],
+            block_side_trial_end_proj_hidden_states[:, 1],
+            alpha=0.4,
+            s=1,
+            c=color_array)
 
-            add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
+        add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
 
     hook_input['tensorboard_writer'].add_figure(
         tag='state_space_trials_by_block_side',
@@ -1668,15 +1661,17 @@ def hook_plot_task_stimuli_and_model_prob_in_first_n_trials(hook_input):
 def add_pca_readout_vectors_to_axis(ax, hook_input):
     # add readout vectors for right trial, right block
     labels = [
-        'Right Trial Readout',
+        '',
+        '',
+        # 'Right Trial Readout',
         # 'Right Block Readout'
     ]
     vectors = [hook_input['pca_trial_readout_vector'],
-               # hook_input['pca_block_readout_vector']
+               hook_input['pca_block_readout_vector']
                ]
     colors = [
         side_color_map['neutral'],
-        # side_color_map['neutral']
+        side_color_map['neutral']
     ]
     for i, (label, vector, color) in enumerate(zip(labels, vectors, colors)):
         # ax.arrow(x=0.,
