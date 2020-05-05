@@ -280,7 +280,7 @@ class RecurrentModel(nn.Module):
 
 
         :param model_input: dictionary containing 4 keys:
-            stimulus: Tensor with shape (batch size, num steps, stimulus dimension)
+            stimulus: Tensor with shape (batch size, 1 step, stimulus dimension)
             reward: Tensor with shape (batch size, 1 step)
             info: List of len batch size. Currently unused
             done: List of len batch size. Booleans indicating whether environment is done.

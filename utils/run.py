@@ -134,7 +134,7 @@ def load_checkpoint(train_log_dir,
     del env_kwargs['batch_size']
 
     # replace some defaults
-    env_kwargs['blocks_per_session'] = 500
+    env_kwargs['blocks_per_session'] = 15  # 500
 
     return model, optimizer, global_step, env_kwargs
 
@@ -199,6 +199,7 @@ def set_seed(seed):
 
 
 def stitch_plots(log_dir):
+
     plot_paths = [os.path.join(log_dir, file_name) for file_name in sorted(os.listdir(log_dir))
                   if file_name.endswith('.jpg') or file_name.endswith('.png')]
 
@@ -217,3 +218,4 @@ def stitch_plots(log_dir):
 
     for plot_path in plot_paths:
         os.remove(plot_path)
+

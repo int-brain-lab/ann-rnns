@@ -1,5 +1,5 @@
-import matplotlib as mpl
 from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import numpy as np
@@ -676,7 +676,7 @@ def hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane(hook_input):
 
     # plot each fixed point in phase space
 
-    jacobians_by_side_by_stimuli = utils.analysis.compute_jacobians_by_side_by_stimuli(
+    jacobians_by_side_by_stimuli = utils.analysis.compute_model_jacobians_by_stimulus_and_feedback(
         model=hook_input['model'],
         trial_data=hook_input['session_data'],
         fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli)
@@ -746,7 +746,7 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
 
     # plot each fixed point in phase space
 
-    jacobians_by_side_by_stimuli = utils.analysis.compute_jacobians_by_side_by_stimuli(
+    jacobians_by_side_by_stimuli = utils.analysis.compute_model_jacobians_by_stimulus_and_feedback(
         model=hook_input['model'],
         trial_data=hook_input['session_data'],
         fixed_points_by_side_by_stimuli=fixed_points_by_side_by_stimuli)
@@ -1016,165 +1016,119 @@ def hook_plot_model_weights_community_detection(hook_input):
     print(10)
 
 
-def hook_plot_state_space_fixed_points(hook_input):
-    displacement_norm_cutoff = 0.5
-
-    # TODO: deduplicate with vector fields plot
-    fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
-
-    num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
-    fig, axes = plt.subplots(nrows=num_stimuli,
-                             ncols=3,
-                             gridspec_kw={"width_ratios": [1, 1, 0.05]},
-                             figsize=(12, 8),
-                             sharex=True,
-                             sharey=True)
-
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-
-    for c, (side, fixed_points_by_stimuli_dict) in \
-            enumerate(fixed_points_by_side_by_stimuli.items()):
-
-        for r, (stimulus, fixed_points_dict) in enumerate(fixed_points_by_stimuli_dict.items()):
-
-            num_grad_steps = fixed_points_dict['num_grad_steps']
-
-            ax = axes[r, c]
-            ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
-            ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
-            if r == 0:
-                ax.set_title(f'Block Side: {side_string_map[side]}')
-            elif r == num_stimuli - 1:
-                ax.set_xlabel('Principal Component #1')
-
-            if c == 0:
-                ax.set_ylabel(f'{stimulus}')
-            # else:
-            #     ax.set_yticklabels([])
-
-            displacement_norms = fixed_points_dict['normalized_displacement_vector_norm']
-            smallest_displacement_norm_indices = displacement_norms.argsort()
-            smallest_displacement_norm_indices = smallest_displacement_norm_indices[
-                displacement_norms[smallest_displacement_norm_indices] < displacement_norm_cutoff]
-
-            try:
-
-                x = fixed_points_dict['pca_final_sampled_hidden_states'][smallest_displacement_norm_indices, 0]
-                y = fixed_points_dict['pca_final_sampled_hidden_states'][smallest_displacement_norm_indices, 1]
-                colors = fixed_points_dict['normalized_displacement_vector_norm'][smallest_displacement_norm_indices]
-
-                sc = ax.scatter(
-                    x,
-                    y,
-                    c=colors,
-                    vmin=0,
-                    vmax=displacement_norm_cutoff,
-                    s=1,
-                    cmap='gist_rainbow')
-
-                # emphasize the fixed point with smallest gradient
-                sc = ax.scatter(
-                    [x[0]],
-                    [y[0]],
-                    c=[colors[0]],
-                    edgecolors='k',
-                    vmin=0,
-                    vmax=displacement_norm_cutoff,
-                    cmap='gist_rainbow'
-                )
-
-            except IndexError:
-                print('No fixed points below displacement norm cutoff')
-
-            add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
-
-    fig.suptitle(f'Fixed Points (Num Grad Steps = {num_grad_steps})')
-
-    # merge the rightmost column for the colorbar
-    gs = axes[0, 2].get_gridspec()
-    for ax in axes[:, -1]:
-        ax.remove()
-    ax_colorbar = fig.add_subplot(gs[:, -1])
-    color_bar = fig.colorbar(sc, cax=ax_colorbar)
-    color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
-    hook_input['tensorboard_writer'].add_figure(
-        tag='hook_plot_psytrack_fit',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+# def hook_plot_state_space_3d(hook_input):
+#
+#     import plotly.graph_objects as go
+#
+#     trial_side_binary = (1 + hook_input['session_data'].trial_side) / 2
+#     block_side_binary = (hook_input['session_data'].classifier_block_side > 0).astype(np.float)
+#     color = block_side_binary * 2 + trial_side_binary
+#     fig = go.Figure(data=[
+#         go.Scatter3d(
+#             x=hook_input['pca_hidden_states'][:, 0],
+#             y=hook_input['pca_hidden_states'][:, 1],
+#             z=hook_input['pca_hidden_states'][:, 2],
+#             mode='markers',
+#             marker=dict(
+#                 size=1,
+#                 color=color,  # set color to an array/list of desired values
+#                 colorscale='Viridis',  # choose a colorscale
+#                 opacity=0.8
+#             )
+#         )])
+#     fig.show()
+#     fig.write_html(file='state_space.html')
 
 
-def hook_plot_state_space_vector_fields(hook_input):
-    # TODO: deduplicate with hook_plot_hidden_state_projected_fixed_points
-    session_data = hook_input['session_data']
+# def hook_plot_state_space_fixed_points(hook_input):
+#     displacement_norm_cutoff = 0.5
+#
+#     # TODO: deduplicate with vector fields plot
+#     fixed_points_by_side_by_stimuli = hook_input['fixed_points_by_side_by_stimuli']
+#
+#     num_stimuli = len(fixed_points_by_side_by_stimuli[1.0].keys())
+#     fig, axes = plt.subplots(nrows=num_stimuli,
+#                              ncols=3,
+#                              gridspec_kw={"width_ratios": [1, 1, 0.05]},
+#                              figsize=(12, 8),
+#                              sharex=True,
+#                              sharey=True)
+#
+#     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+#
+#     for c, (side, fixed_points_by_stimuli_dict) in \
+#             enumerate(fixed_points_by_side_by_stimuli.items()):
+#
+#         for r, (stimulus, fixed_points_dict) in enumerate(fixed_points_by_stimuli_dict.items()):
+#
+#             num_grad_steps = fixed_points_dict['num_grad_steps']
+#
+#             ax = axes[r, c]
+#             ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+#             ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+#             if r == 0:
+#                 ax.set_title(f'Block Side: {side_string_map[side]}')
+#             elif r == num_stimuli - 1:
+#                 ax.set_xlabel('Principal Component #1')
+#
+#             if c == 0:
+#                 ax.set_ylabel(f'{stimulus}')
+#             # else:
+#             #     ax.set_yticklabels([])
+#
+#             displacement_norms = fixed_points_dict['normalized_displacement_vector_norm']
+#             smallest_displacement_norm_indices = displacement_norms.argsort()
+#             smallest_displacement_norm_indices = smallest_displacement_norm_indices[
+#                 displacement_norms[smallest_displacement_norm_indices] < displacement_norm_cutoff]
+#
+#             try:
+#
+#                 x = fixed_points_dict['pca_final_sampled_hidden_states'][smallest_displacement_norm_indices, 0]
+#                 y = fixed_points_dict['pca_final_sampled_hidden_states'][smallest_displacement_norm_indices, 1]
+#                 colors = fixed_points_dict['normalized_displacement_vector_norm'][smallest_displacement_norm_indices]
+#
+#                 sc = ax.scatter(
+#                     x,
+#                     y,
+#                     c=colors,
+#                     vmin=0,
+#                     vmax=displacement_norm_cutoff,
+#                     s=1,
+#                     cmap='gist_rainbow')
+#
+#                 # emphasize the fixed point with smallest gradient
+#                 sc = ax.scatter(
+#                     [x[0]],
+#                     [y[0]],
+#                     c=[colors[0]],
+#                     edgecolors='k',
+#                     vmin=0,
+#                     vmax=displacement_norm_cutoff,
+#                     cmap='gist_rainbow'
+#                 )
+#
+#             except IndexError:
+#                 print('No fixed points below displacement norm cutoff')
+#
+#             add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
+#
+#     fig.suptitle(f'Fixed Points (Num Grad Steps = {num_grad_steps})')
+#
+#     # merge the rightmost column for the colorbar
+#     gs = axes[0, 2].get_gridspec()
+#     for ax in axes[:, -1]:
+#         ax.remove()
+#     ax_colorbar = fig.add_subplot(gs[:, -1])
+#     color_bar = fig.colorbar(sc, cax=ax_colorbar)
+#     color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
+#     hook_input['tensorboard_writer'].add_figure(
+#         tag='hook_plot_psytrack_fit',
+#         figure=fig,
+#         global_step=hook_input['grad_step'],
+#         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
-    vector_fields_by_side_by_stimuli = utils.analysis.compute_model_hidden_state_vector_field(
-        model=hook_input['model'],
-        session_data=session_data,
-        hidden_states=hook_input['hidden_states'],
-        pca=hook_input['pca'],
-        pca_hidden_states=hook_input['pca_hidden_states'])
 
-    num_stimuli = len(vector_fields_by_side_by_stimuli[1.0].keys())
-
-    # for feedback, session_data_by_feedback in session_data.groupby(['reward']):
-
-    fig, axes = plt.subplots(nrows=num_stimuli,
-                             ncols=3,
-                             gridspec_kw={"width_ratios": [1, 1, 0.05]},
-                             figsize=(9, 6),
-                             sharex=True,
-                             sharey=True)
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-
-    for c, (side, vector_fields_by_stimuli_dict) in \
-            enumerate(vector_fields_by_side_by_stimuli.items()):
-
-        for r, (stimulus, vector_field_dict) in enumerate(vector_fields_by_stimuli_dict.items()):
-
-            ax = axes[r, c]
-            ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
-            ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
-            if r == 0:
-                ax.set_title(f'Block Side: {side_string_map[side]}')
-            elif r == num_stimuli - 1:
-                ax.set_xlabel('Principal Component #1')
-
-            if c == 0:
-                ax.set_ylabel(stimulus)
-            # else:
-            # ax.set_yticklabels([])
-
-            vector_magnitude = np.linalg.norm(
-                vector_field_dict['displacement_vector'],
-                axis=1)
-
-            qvr = ax.quiver(
-                vector_field_dict['sampled_pca_hidden_states'][:, 0],
-                vector_field_dict['sampled_pca_hidden_states'][:, 1],
-                0.005 * vector_field_dict['displacement_vector'][:, 0] / vector_magnitude,
-                0.005 * vector_field_dict['displacement_vector'][:, 1] / vector_magnitude,
-                vector_magnitude,
-                scale=.1,
-                cmap='gist_rainbow')
-
-            add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
-
-    # merge the rightmost column for the colorbar
-    gs = axes[0, 2].get_gridspec()
-    for ax in axes[:, -1]:
-        ax.remove()
-    ax_colorbar = fig.add_subplot(gs[:, -1])
-    color_bar = fig.colorbar(qvr, cax=ax_colorbar)
-    color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
-    hook_input['tensorboard_writer'].add_figure(
-        tag='state_space_vector_fields',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
-
-
-def hook_plot_state_space_trajectories_between_trials(hook_input):
+def hook_plot_state_space_effect_of_feedback(hook_input):
     session_data = hook_input['session_data']
 
     # keep only data with feedback
@@ -1191,7 +1145,7 @@ def hook_plot_state_space_trajectories_between_trials(hook_input):
 
     for i, ((feedback, trial_side), session_data_by_trial_side_and_feedback) in \
             enumerate(session_data.groupby(['reward', 'trial_side'])):
-        
+
         row, col = int(i / 2), int(i % 2)
         ax = axes[row, col]
         ax.set_title(f'{side_string_map[trial_side]} Trials, Feedback: {feedback}')
@@ -1219,11 +1173,13 @@ def hook_plot_state_space_trajectories_between_trials(hook_input):
         qvr = ax.quiver(
             pca_hidden_states_pre_feedback[:, 0],
             pca_hidden_states_pre_feedback[:, 1],
-            0.005 * displacement_vectors[:, 0] / displacement_norm,
-            0.005 * displacement_vectors[:, 1] / displacement_norm,
-            displacement_norm,
-            scale=.1,
-            # alpha=0.4,
+            displacement_vectors[:, 0],
+            displacement_vectors[:, 1],
+            displacement_norm,  # color
+            angles='xy',  # this and the next three ensures vector scales match data scales
+            scale_units='xy',
+            scale=1,
+            alpha=0.4,
             cmap='gist_rainbow')
 
         add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
@@ -1242,6 +1198,156 @@ def hook_plot_state_space_trajectories_between_trials(hook_input):
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
+def hook_plot_state_space_fixed_point_basins_of_attraction(hook_input):
+
+    num_cols = 3
+    fig, axes = plt.subplots(
+        nrows=2,
+        ncols=num_cols+1,
+        figsize=(4, 3),
+        gridspec_kw={"width_ratios": [1, 1, 1, 0.05]})
+
+    fixed_points_basins_df = hook_input['fixed_points_basins_df']
+    color_min = 0.
+    color_max = max([
+        max(energy_array) for energy_array in fixed_points_basins_df['energy'].values
+        if isinstance(energy_array, list)])
+
+    for i, ((lstim, rstim, fdbk), fixed_point_basin_subset) in enumerate(fixed_points_basins_df.groupby([
+        'left_stimulus', 'right_stimulus', 'feedback'])):
+
+        row, col = int(i / num_cols), int(i % num_cols)
+
+        ax = axes[row, col]
+        title = f'l={np.round(lstim, 2)}, r={np.round(rstim, 2)}, f={fdbk}'
+        ax.set_title(title)
+        if row == 1:
+            ax.set_xlabel('Principal Component #1')
+        else:
+            ax.set_xticklabels([])
+        if col == 0:
+            ax.set_ylabel('Principal Component #2')
+        else:
+            ax.set_yticklabels([])
+        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+
+        if not isinstance(fixed_point_basin_subset.loc[i, 'pca_fixed_point_state'], list):
+            continue
+
+        # plot fixed point and annotate it with displacement
+        pca_fixed_point_state = np.array(
+            fixed_point_basin_subset.loc[i, 'pca_fixed_point_state'])
+        ax.scatter(
+            pca_fixed_point_state[0],
+            pca_fixed_point_state[1],
+            c='k',
+            marker='*',
+            s=20,
+            zorder=2  # put in front
+        )
+        ax.annotate(
+            np.round(fixed_point_basin_subset.loc[i, 'fixed_point_displacement'], 3),
+            (pca_fixed_point_state[0],
+            pca_fixed_point_state[1]+0.5),
+            weight='bold')
+
+        # plot energy contour within basin
+        initial_pca_states_in_basin = np.array(
+            fixed_point_basin_subset.loc[i, 'initial_pca_states_in_basin'])
+        energy = np.array(
+            fixed_point_basin_subset['energy'].tolist())
+        sc = ax.scatter(
+            initial_pca_states_in_basin[:, 0],
+            initial_pca_states_in_basin[:, 1],
+            c=energy,
+            zorder=1,  # put behind
+            s=2,
+            cmap='gist_rainbow',
+            vmin=color_min,
+            vmax=color_max)
+
+    # merge the rightmost column for the colorbar
+    gs = axes[0, 3].get_gridspec()
+    for ax in axes[:, -1]:
+        ax.remove()
+    ax_colorbar = fig.add_subplot(gs[:, -1])
+    color_bar = fig.colorbar(sc, cax=ax_colorbar)
+    color_bar.set_label(r'Energy')
+
+    plt.show()
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag=f'state_space_fixed_point_basins',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_state_space_fixed_point_search(hook_input):
+
+    num_cols = 3
+    fig, axes = plt.subplots(
+        nrows=2,
+        ncols=num_cols+1,
+        figsize=(4, 3),
+        gridspec_kw={"width_ratios": [1, 1, 1, 0.05]})
+
+    color_min = 0.
+    color_max = .75  # np.max(hook_input['fixed_point_df']['displacement_norm'])
+
+    for i, ((lstim, rstim, fdbk), fixed_point_subset) in enumerate(hook_input['fixed_point_df'].groupby([
+        'left_stimulus', 'right_stimulus', 'feedback'])):
+
+        row, col = int(i / num_cols), int(i % num_cols)
+
+        ax = axes[row, col]
+        title = f'l={np.round(lstim, 2)}, r={np.round(rstim, 2)}, f={fdbk}'
+        ax.set_title(title)
+        if row == 1:
+            ax.set_xlabel('Principal Component #1')
+        else:
+            ax.set_xticklabels([])
+        if col == 0:
+            ax.set_ylabel('Principal Component #2')
+        else:
+            ax.set_yticklabels([])
+        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+
+        final_pca_sampled_states = np.stack(
+            fixed_point_subset['final_pca_sampled_state'].values.tolist())
+
+        # indices_to_keep = fixed_point_subset['displacement_norm'] < color_max
+        indices_to_keep = fixed_point_subset['jacobian_hidden_stable'].values.astype(np.bool)
+
+        sc = ax.scatter(
+            final_pca_sampled_states[indices_to_keep, 0],
+            final_pca_sampled_states[indices_to_keep, 1],
+            c=fixed_point_subset['displacement_norm'][indices_to_keep],
+            s=3,
+            vmin=color_min,
+            vmax=color_max,
+            cmap='gist_rainbow')
+
+        add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
+
+    # merge the rightmost column for the colorbar
+    gs = axes[0, 3].get_gridspec()
+    for ax in axes[:, -1]:
+        ax.remove()
+    ax_colorbar = fig.add_subplot(gs[:, -1])
+    color_bar = fig.colorbar(sc, cax=ax_colorbar)
+    color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
+
+    plt.show()
+    hook_input['tensorboard_writer'].add_figure(
+        tag=f'state_space_fixed_point_search',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
 def hook_plot_state_space_trajectories_within_block(hook_input):
     session_data = hook_input['session_data']
 
@@ -1253,7 +1359,7 @@ def hook_plot_state_space_trajectories_within_block(hook_input):
 
     # select only environment 0, last num_rows * num_cols blocks
     subset_session_data = session_data[(session_data.session_index == 0) &
-                                       (session_data.block_index > max(session_data.block_index) - num_cols*num_rows)]
+                                       (session_data.block_index > max(session_data.block_index) - num_cols * num_rows)]
     # separate by side bias
     fig, axes = plt.subplots(nrows=num_rows,
                              ncols=num_cols,
@@ -1316,50 +1422,50 @@ def hook_plot_state_space_trajectories_within_block(hook_input):
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_state_space_trajectories_within_block_smooth(hook_input):
-    trajectory_controlled_output = utils.analysis.compute_projected_hidden_state_trajectory_controlled(
-        model=hook_input['model'],
-        pca=hook_input['pca'])
-
-    session_data = trajectory_controlled_output['session_data']
-    max_block_len = max(session_data.groupby(['session_index', 'stimuli_block_number']).size())
-
-    fig, axes = plt.subplots(nrows=3,
-                             ncols=4,  # 1 row, 3 columns
-                             gridspec_kw={"width_ratios": [1, 1, 1, 1]},
-                             figsize=(18, 12))
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    plt.suptitle(f'Model State Space (Projected) Smooth Trajectories')
-
-    for block_num, trial_data_by_block in session_data.groupby('stimuli_block_number'):
-        row, col = block_num // 4, block_num % 4  # hard coded for 2 rows, 4 columns
-        ax = axes[row, col]
-        ax.set_title(f'Block Num: {1 + block_num}')
-        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
-        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
-        if row == 1:
-            ax.set_xlabel('Principal Component #1')
-        if col == 0:
-            ax.set_ylabel('Principal Component #2')
-
-        block_indices = trial_data_by_block.index.values
-        proj_hidden_states_block = trajectory_controlled_output['projected_hidden_states'][block_indices]
-        stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
-        for i in range(len(block_indices) - 1):
-            ax.plot(
-                proj_hidden_states_block[i:i + 2, 0],
-                proj_hidden_states_block[i:i + 2, 1],
-                color=plt.cm.jet(i / max_block_len))
-            ax.text(
-                proj_hidden_states_block[i + 1, 0],
-                proj_hidden_states_block[i + 1, 1],
-                str(stimuli[i]))
-
-    hook_input['tensorboard_writer'].add_figure(
-        tag='hidden_state_projected_phase_space_trajectories_controlled',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+# def hook_plot_state_space_trajectories_within_block_smooth(hook_input):
+#     trajectory_controlled_output = utils.analysis.compute_projected_hidden_state_trajectory_controlled(
+#         model=hook_input['model'],
+#         pca=hook_input['pca'])
+#
+#     session_data = trajectory_controlled_output['session_data']
+#     max_block_len = max(session_data.groupby(['session_index', 'stimuli_block_number']).size())
+#
+#     fig, axes = plt.subplots(nrows=3,
+#                              ncols=4,  # 1 row, 3 columns
+#                              gridspec_kw={"width_ratios": [1, 1, 1, 1]},
+#                              figsize=(18, 12))
+#     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+#     plt.suptitle(f'Model State Space (Projected) Smooth Trajectories')
+#
+#     for block_num, trial_data_by_block in session_data.groupby('stimuli_block_number'):
+#         row, col = block_num // 4, block_num % 4  # hard coded for 2 rows, 4 columns
+#         ax = axes[row, col]
+#         ax.set_title(f'Block Num: {1 + block_num}')
+#         ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+#         ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+#         if row == 1:
+#             ax.set_xlabel('Principal Component #1')
+#         if col == 0:
+#             ax.set_ylabel('Principal Component #2')
+#
+#         block_indices = trial_data_by_block.index.values
+#         proj_hidden_states_block = trajectory_controlled_output['projected_hidden_states'][block_indices]
+#         stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
+#         for i in range(len(block_indices) - 1):
+#             ax.plot(
+#                 proj_hidden_states_block[i:i + 2, 0],
+#                 proj_hidden_states_block[i:i + 2, 1],
+#                 color=plt.cm.jet(i / max_block_len))
+#             ax.text(
+#                 proj_hidden_states_block[i + 1, 0],
+#                 proj_hidden_states_block[i + 1, 1],
+#                 str(stimuli[i]))
+#
+#     hook_input['tensorboard_writer'].add_figure(
+#         tag='hidden_state_projected_phase_space_trajectories_controlled',
+#         figure=fig,
+#         global_step=hook_input['grad_step'],
+#         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_state_space_trajectories_within_trial(hook_input):
@@ -1397,7 +1503,6 @@ def hook_plot_state_space_trajectories_within_trial(hook_input):
         ax.set_title(title)
         ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
         ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
-
 
         if row == (num_rows - 1):
             ax.set_xlabel('Principal Component #1')
@@ -1501,6 +1606,76 @@ def hook_plot_state_space_trials_by_classifier_and_trial_index(hook_input):
 
     hook_input['tensorboard_writer'].add_figure(
         tag='state_space_trials_by_block_side',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_state_space_vector_fields(hook_input):
+    # TODO: deduplicate with hook_plot_hidden_state_projected_fixed_points
+    session_data = hook_input['session_data']
+
+    vector_fields_by_side_by_stimuli = utils.analysis.compute_model_hidden_state_vector_field(
+        model=hook_input['model'],
+        session_data=session_data,
+        hidden_states=hook_input['hidden_states'],
+        pca=hook_input['pca'],
+        pca_hidden_states=hook_input['pca_hidden_states'])
+
+    num_stimuli = len(vector_fields_by_side_by_stimuli[1.0].keys())
+
+    # for feedback, session_data_by_feedback in session_data.groupby(['reward']):
+
+    fig, axes = plt.subplots(nrows=num_stimuli,
+                             ncols=3,
+                             gridspec_kw={"width_ratios": [1, 1, 0.05]},
+                             figsize=(9, 6),
+                             sharex=True,
+                             sharey=True)
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    for c, (side, vector_fields_by_stimuli_dict) in \
+            enumerate(vector_fields_by_side_by_stimuli.items()):
+
+        for r, (stimulus, vector_field_dict) in enumerate(vector_fields_by_stimuli_dict.items()):
+
+            ax = axes[r, c]
+            ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+            ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+            if r == 0:
+                ax.set_title(f'Block Side: {side_string_map[side]}')
+            elif r == num_stimuli - 1:
+                ax.set_xlabel('Principal Component #1')
+
+            if c == 0:
+                ax.set_ylabel(stimulus)
+            # else:
+            # ax.set_yticklabels([])
+
+            vector_magnitude = np.linalg.norm(
+                vector_field_dict['displacement_vector'],
+                axis=1)
+
+            qvr = ax.quiver(
+                vector_field_dict['sampled_pca_hidden_states'][:, 0],
+                vector_field_dict['sampled_pca_hidden_states'][:, 1],
+                0.005 * vector_field_dict['displacement_vector'][:, 0] / vector_magnitude,
+                0.005 * vector_field_dict['displacement_vector'][:, 1] / vector_magnitude,
+                vector_magnitude,
+                scale=.1,
+                cmap='gist_rainbow')
+
+            add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
+
+    # merge the rightmost column for the colorbar
+    gs = axes[0, 2].get_gridspec()
+    for ax in axes[:, -1]:
+        ax.remove()
+    ax_colorbar = fig.add_subplot(gs[:, -1])
+    color_bar = fig.colorbar(qvr, cax=ax_colorbar)
+    color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
+    hook_input['tensorboard_writer'].add_figure(
+        tag='state_space_vector_fields',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
