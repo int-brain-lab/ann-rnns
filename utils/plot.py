@@ -1176,7 +1176,7 @@ def hook_plot_state_space_effect_of_feedback(hook_input):
             displacement_vectors[:, 0],
             displacement_vectors[:, 1],
             displacement_norm,  # color
-            angles='xy',  # this and the next three ensures vector scales match data scales
+            angles='xy',  # this and the next two ensures vector scales match data scales
             scale_units='xy',
             scale=1,
             alpha=0.4,
@@ -1204,7 +1204,7 @@ def hook_plot_state_space_fixed_point_basins_of_attraction(hook_input):
     fig, axes = plt.subplots(
         nrows=2,
         ncols=num_cols+1,
-        figsize=(4, 3),
+        figsize=(8, 6),
         gridspec_kw={"width_ratios": [1, 1, 1, 0.05]})
 
     fixed_points_basins_df = hook_input['fixed_points_basins_df']
@@ -1243,14 +1243,15 @@ def hook_plot_state_space_fixed_point_basins_of_attraction(hook_input):
             pca_fixed_point_state[1],
             c='k',
             marker='*',
-            s=20,
+            s=30,
             zorder=2  # put in front
         )
         ax.annotate(
             np.round(fixed_point_basin_subset.loc[i, 'fixed_point_displacement'], 3),
             (pca_fixed_point_state[0],
             pca_fixed_point_state[1]+0.5),
-            weight='bold')
+            weight='bold',
+            fontSize=8)
 
         # plot energy contour within basin
         initial_pca_states_in_basin = np.array(
@@ -1262,7 +1263,7 @@ def hook_plot_state_space_fixed_point_basins_of_attraction(hook_input):
             initial_pca_states_in_basin[:, 1],
             c=energy,
             zorder=1,  # put behind
-            s=2,
+            s=6,
             cmap='gist_rainbow',
             vmin=color_min,
             vmax=color_max)
@@ -1273,9 +1274,7 @@ def hook_plot_state_space_fixed_point_basins_of_attraction(hook_input):
         ax.remove()
     ax_colorbar = fig.add_subplot(gs[:, -1])
     color_bar = fig.colorbar(sc, cax=ax_colorbar)
-    color_bar.set_label(r'Energy')
-
-    plt.show()
+    color_bar.set_label(r'Energy ($0.5 x^T P x$)')
 
     hook_input['tensorboard_writer'].add_figure(
         tag=f'state_space_fixed_point_basins',
@@ -1290,7 +1289,7 @@ def hook_plot_state_space_fixed_point_search(hook_input):
     fig, axes = plt.subplots(
         nrows=2,
         ncols=num_cols+1,
-        figsize=(4, 3),
+        figsize=(8, 6),
         gridspec_kw={"width_ratios": [1, 1, 1, 0.05]})
 
     color_min = 0.
@@ -1340,7 +1339,6 @@ def hook_plot_state_space_fixed_point_search(hook_input):
     color_bar = fig.colorbar(sc, cax=ax_colorbar)
     color_bar.set_label(r'$||h_t - RNN(h_t, s_t) ||_2$')
 
-    plt.show()
     hook_input['tensorboard_writer'].add_figure(
         tag=f'state_space_fixed_point_search',
         figure=fig,
@@ -1612,63 +1610,59 @@ def hook_plot_state_space_trials_by_classifier_and_trial_index(hook_input):
 
 
 def hook_plot_state_space_vector_fields(hook_input):
-    # TODO: deduplicate with hook_plot_hidden_state_projected_fixed_points
-    session_data = hook_input['session_data']
 
-    vector_fields_by_side_by_stimuli = utils.analysis.compute_model_hidden_state_vector_field(
-        model=hook_input['model'],
-        session_data=session_data,
-        hidden_states=hook_input['hidden_states'],
-        pca=hook_input['pca'],
-        pca_hidden_states=hook_input['pca_hidden_states'])
+    num_cols = 3
+    fig, axes = plt.subplots(
+        nrows=2,
+        ncols=num_cols + 1,  # +1 for colorbar
+        figsize=(8, 6),
+        gridspec_kw={"width_ratios": [1, 1, 1, 0.05]})
 
-    num_stimuli = len(vector_fields_by_side_by_stimuli[1.0].keys())
+    color_min = 0.
+    color_max = np.max(hook_input['fixed_point_df']['displacement_norm'])
 
-    # for feedback, session_data_by_feedback in session_data.groupby(['reward']):
+    for i, ((lstim, rstim, fdbk), fixed_point_subset) in enumerate(hook_input['fixed_point_df'].groupby([
+        'left_stimulus', 'right_stimulus', 'feedback'])):
 
-    fig, axes = plt.subplots(nrows=num_stimuli,
-                             ncols=3,
-                             gridspec_kw={"width_ratios": [1, 1, 0.05]},
-                             figsize=(9, 6),
-                             sharex=True,
-                             sharey=True)
-    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+        row, col = int(i / num_cols), int(i % num_cols)
 
-    for c, (side, vector_fields_by_stimuli_dict) in \
-            enumerate(vector_fields_by_side_by_stimuli.items()):
+        ax = axes[row, col]
+        title = f'l={np.round(lstim, 2)}, r={np.round(rstim, 2)}, f={fdbk}'
+        ax.set_title(title)
+        if row == 1:
+            ax.set_xlabel('Principal Component #1')
+        else:
+            ax.set_xticklabels([])
+        if col == 0:
+            ax.set_ylabel('Principal Component #2')
+        else:
+            ax.set_yticklabels([])
+        ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+        ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
 
-        for r, (stimulus, vector_field_dict) in enumerate(vector_fields_by_stimuli_dict.items()):
+        initial_pca_sampled_states = np.stack(
+            fixed_point_subset['initial_pca_sampled_state'].values.tolist())
 
-            ax = axes[r, c]
-            ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
-            ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
-            if r == 0:
-                ax.set_title(f'Block Side: {side_string_map[side]}')
-            elif r == num_stimuli - 1:
-                ax.set_xlabel('Principal Component #1')
+        displacement_pca = np.stack(fixed_point_subset['displacement_pca'].values.tolist())
 
-            if c == 0:
-                ax.set_ylabel(stimulus)
-            # else:
-            # ax.set_yticklabels([])
+        qvr = ax.quiver(
+            initial_pca_sampled_states[:, 0],
+            initial_pca_sampled_states[:, 1],
+            displacement_pca[:, 0],
+            displacement_pca[:, 1],
+            fixed_point_subset['displacement_norm'],  # color
+            angles='xy',  # this and the next two ensures vector scales match data scales
+            scale_units='xy',
+            scale=1,
+            alpha=0.6,
+            clim=(color_min, color_max),
+            headwidth=7,
+            cmap='gist_rainbow')
 
-            vector_magnitude = np.linalg.norm(
-                vector_field_dict['displacement_vector'],
-                axis=1)
-
-            qvr = ax.quiver(
-                vector_field_dict['sampled_pca_hidden_states'][:, 0],
-                vector_field_dict['sampled_pca_hidden_states'][:, 1],
-                0.005 * vector_field_dict['displacement_vector'][:, 0] / vector_magnitude,
-                0.005 * vector_field_dict['displacement_vector'][:, 1] / vector_magnitude,
-                vector_magnitude,
-                scale=.1,
-                cmap='gist_rainbow')
-
-            add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
+        add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
 
     # merge the rightmost column for the colorbar
-    gs = axes[0, 2].get_gridspec()
+    gs = axes[0, 3].get_gridspec()
     for ax in axes[:, -1]:
         ax.remove()
     ax_colorbar = fig.add_subplot(gs[:, -1])
@@ -1836,10 +1830,10 @@ def hook_plot_task_stimuli_and_model_prob_in_first_n_trials(hook_input):
 def add_pca_readout_vectors_to_axis(ax, hook_input):
     # add readout vectors for right trial, right block
     labels = [
-        '',
-        '',
-        # 'Right Trial Readout',
-        # 'Right Block Readout'
+        # '',
+        # '',
+        'Right Trial Readout',
+        'Right Block Readout'
     ]
     vectors = [hook_input['pca_trial_readout_vector'],
                hook_input['pca_block_readout_vector']
@@ -1849,14 +1843,15 @@ def add_pca_readout_vectors_to_axis(ax, hook_input):
         side_color_map['neutral']
     ]
     for i, (label, vector, color) in enumerate(zip(labels, vectors, colors)):
-        # ax.arrow(x=0.,
-        #          y=0.,
-        #          dx=2 * vector[0],
-        #          dy=2 * vector[1],
-        #          color=color,
-        #          length_includes_head=True,
-        #          head_width=0.16,
-        #          zorder=1)  # plot on top
+
+        ax.arrow(x=0.,
+                 y=0.,
+                 dx=2 * vector[0],
+                 dy=2 * vector[1],
+                 color=color,
+                 length_includes_head=True,
+                 head_width=0.16,
+                 zorder=1)  # plot on top
 
         # calculate perpendicular hyperplane
         hyperplane = np.matmul(rotation_matrix_90, vector)
@@ -1872,5 +1867,5 @@ def add_pca_readout_vectors_to_axis(ax, hook_input):
 
         ax.annotate(
             label,
-            xy=(vector[0],
-                vector[1]))
+            xy=(vector[0]+0.5,
+                vector[1]+0.5))

@@ -21,9 +21,9 @@ from utils.env import create_custom_worlds
 from utils.run import run_envs
 
 possible_stimuli = torch.DoubleTensor(
-    [[2.2, 0.2],
+    [[1.2, 0.2],
      [0.2, 0.2],
-     [0.2, 2.2],
+     [0.2, 1.2],
      [0., 0.],
      [0., 0.],
      [0., 0.]])
@@ -64,7 +64,7 @@ def add_analysis_data_to_hook_input(hook_input):
         jlm=hidden_states_jl_results['jlm'],
         jlm_xrange=hidden_states_jl_results['jl_xrange'],
         jlm_yrange=hidden_states_jl_results['jl_yrange'],
-        pca_sampled_states=hidden_states_pca_results['pca_hidden_states'],
+        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
         trial_readout_vector=model_readout_vectors_results['trial_readout_vector'],
         block_readout_vector=model_readout_vectors_results['block_readout_vector'],
         num_grad_steps=500)
@@ -145,7 +145,7 @@ def compute_model_fixed_points(model,
 
         # need to save hidden state for fixed point basin analysis
         if i == 1:
-            second_states = final_states.clone()
+            second_states = model_forward_output['core_hidden'].clone()
         optimizer.zero_grad()
         model_forward_output = run_model_one_step(
             model=model,
@@ -169,8 +169,7 @@ def compute_model_fixed_points(model,
         loss.backward()
         optimizer.step()
 
-    print('Stimulus val: ', stimulus_val.numpy())
-    print('Feedback val: ', feedback_val.numpy())
+    print('Stimulus val: ', stimulus_val.numpy(), '\t\tFeedback val: ', feedback_val.numpy())
     normalized_displacement_norm = torch.div(
         displacement_norm,
         torch.norm(final_states, dim=(1, 2)))
@@ -179,6 +178,7 @@ def compute_model_fixed_points(model,
     model_fixed_points_results = dict(
         second_states=second_states.detach().numpy(),
         final_states=final_states.detach().numpy(),
+        final_states_next_state=model_forward_hidden_state.detach().numpy(),
         displacement=displacement.detach().numpy(),
         displacement_norm=displacement_norm.detach().numpy(),
         normalized_displacement_norm=normalized_displacement_norm.detach().numpy(),
@@ -199,8 +199,7 @@ def compute_model_fixed_points(model,
     return model_fixed_points_results
 
 
-def compute_model_fixed_points_basins_of_attraction(fixed_point_df,
-                                                    model):
+def compute_model_fixed_points_basins_of_attraction(fixed_point_df):
     # discrete: http://automatica.dei.unipd.it/tl_files/utenti2/bof/Papers/NoteDiscreteLyapunov.pdf
     # continuous: http://sisdin.unipv.it/labsisdin/teaching/courses/ails/files/5-Lyapunov_theory_2_handout.pdf
 
@@ -215,7 +214,8 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df,
         'fixed_point_displacement',
         'hidden_states_in_basin',
         'initial_pca_states_in_basin',
-        'energy']
+        'energy',
+    ]
     fixed_points_basins_df = pd.DataFrame(
         np.nan,
         columns=columns,
@@ -234,24 +234,28 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df,
         fixed_points_basins_df.at[i, 'right_stimulus'] = rstim
         fixed_points_basins_df.at[i, 'feedback'] = fdbk
 
-        # only original jacobian is Hurwitz. Maybe consider PCA jacobian later.
+        print('Lstim: ', lstim, '\t\tRstim: ', rstim, '\t\tFdbk: ', fdbk)
+
+        # Jacobian and PCA Jacobian must be asymptotically stable
         stable_fp_df = fixed_point_subset_df[
             (fixed_point_subset_df['jacobian_hidden_stable'] == 1) &
             (fixed_point_subset_df['jacobian_pca_stable'] == 1)]
 
         if len(stable_fp_df) == 0:
+            print('No stable fixed points')
             continue
 
         # filter for MOST fixed point
         minimum_displacement = fixed_point_subset_df['displacement_norm'].min()
-        if minimum_displacement > 0.01:
-            continue
         minimum_displacement_index = fixed_point_subset_df['displacement_norm'].idxmin()
         fixed_point_state = fixed_point_subset_df.at[
             minimum_displacement_index, 'final_sampled_state']
+        fixed_point_state_next_state = fixed_point_subset_df.at[
+            minimum_displacement_index, 'final_sampled_state_next_state']
         pca_fixed_point_state = fixed_point_subset_df.at[
             minimum_displacement_index, 'final_pca_sampled_state']
 
+        # solve the discrete Lyapunov equation
         Q = np.eye(len(fixed_point_state.flatten()))
         lambda_min_Q = np.min(np.linalg.eigvals(Q))
         A = np.array(fixed_point_subset_df.at[minimum_displacement_index, 'jacobian_hidden'])
@@ -261,13 +265,12 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df,
         lambda_max_P = np.max(np.linalg.eigvals(P))
 
         # find parameter controlling basin of attraction
+        # gamma should be positive
         gamma = np.max(np.roots([
-            -lambda_min_Q,
-            2 * lambda_max_P * np.sqrt(lambda_max_ATA),
-            lambda_max_P]))
-
-        # shrink gamma a little to exclude the root
-        gamma -= .01
+            -lambda_max_P,
+            -2 * lambda_max_P * np.sqrt(lambda_max_ATA),
+            lambda_min_Q]))
+        print('Gamma: ', gamma)
 
         if gamma <= 0:
             print('No positive roots found for gamma')
@@ -283,6 +286,7 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df,
         # coordinate transform the system
         coord_transform_initial_states = initial_sampled_states - fixed_point_state
         coord_transform_second_states = second_sampled_states - fixed_point_state
+        coord_transform_fixed_point_next_state = fixed_point_state_next_state - fixed_point_state
 
         # Let the system be x(t+1) = f(x(t)). Following the coordinate transform,
         # Taylor series about the fixed point x^* = 0. Then f(x) = f(x^*) + A x + g(x),
@@ -293,27 +297,37 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df,
             A)
 
         # g(x) is the Taylor Series remainder
-        # TODO: because f(x^*) is not exactly zero, subtract it i.e. g(x) = f(x) - f(x^*) - A x
-        ts_remainder = coord_transform_second_states - ts_linearized_component
+        # because f(x^*) is not exactly zero, subtract it i.e. g(x) = f(x) - f(x^*) - A x
+        ts_remainder = coord_transform_second_states - ts_linearized_component\
+                       - coord_transform_fixed_point_next_state
 
         # select points such that ||g(x)|| < \gamma ||Ax||
         g_x_norm = np.linalg.norm(ts_remainder, axis=(1, 2))
         x_norm = np.linalg.norm(coord_transform_initial_states, axis=(1, 2))
-        within_region_indices = g_x_norm < (gamma * x_norm)
-        if not np.any(within_region_indices):
+
+        meets_criterion_indices = g_x_norm < (gamma * x_norm)
+        print('Fraction of points meeting criterion: ', np.mean(meets_criterion_indices))
+
+        if not np.any(meets_criterion_indices):
             continue
-        hidden_states_in_basin = initial_sampled_states[within_region_indices]
+
+        # index_of_smallest_norm_meeting_criterion = fixed_point_subset_df.index[
+        #     np.argmin(x_norm[meets_criterion_indices])]
+        # radius of asymptotic stability
+        # basin_radius = fixed_point_subset_df.loc[
+        #     index_of_smallest_norm_meeting_criterion, 'displacement_pca_norm']
+        hidden_states_in_basin = initial_sampled_states[meets_criterion_indices]
         initial_pca_states_in_basin = np.stack(fixed_point_subset_df.loc[
-            within_region_indices, 'initial_pca_sampled_state'].values.tolist())
+                                                   meets_criterion_indices, 'initial_pca_sampled_state'].values.tolist())
         within_region_coord_transform_states = coord_transform_initial_states[
-            within_region_indices].squeeze(1)
+            meets_criterion_indices].squeeze(1)
         # energy should be V(x) = 0.5*x^T P x
         # numpy is a bitch with matrix multiplication if the first axis has a batch
         # use einsum instead
         energies = 0.5 * np.einsum('ij,jk,ik->i',
-            within_region_coord_transform_states,
-            P,
-            within_region_coord_transform_states)
+                                   within_region_coord_transform_states,
+                                   P,
+                                   within_region_coord_transform_states)
 
         fixed_points_basins_subrows = {
             'fixed_point_state': fixed_point_state.astype(np.object),
@@ -322,6 +336,7 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df,
             'hidden_states_in_basin': hidden_states_in_basin.astype(np.object),
             'initial_pca_states_in_basin': initial_pca_states_in_basin.astype(np.object),
             'energy': energies.astype(np.object),
+            # 'basin_radius': basin_radius,
         }
         for column, value in fixed_points_basins_subrows.items():
             fixed_points_basins_df.at[i, column] = value.tolist()
@@ -336,7 +351,7 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
                                                         jlm,
                                                         jlm_xrange,
                                                         jlm_yrange,
-                                                        pca_sampled_states,
+                                                        pca_hidden_states,
                                                         trial_readout_vector,
                                                         block_readout_vector,
                                                         num_grad_steps=100):
@@ -346,7 +361,7 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
         projection_obj=pca,
         xrange=pca_xrange,
         yrange=pca_yrange,
-        projected_sampled_states=pca_sampled_states)
+        pca_hidden_states=pca_hidden_states)
     initial_sampled_states = torch.from_numpy(np.expand_dims(sampled_states, axis=1))
 
     # calculate model's subjective belief
@@ -365,10 +380,14 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
         'initial_sampled_state',
         'second_sampled_state',  # necessary for fixed point basin analysis
         'initial_pca_sampled_state',
+        'second_pca_sampled_state',
         'final_sampled_state',
+        'final_sampled_state_next_state',
         'final_pca_sampled_state',
         'displacement',
+        'displacement_pca',
         'displacement_norm',
+        'displacement_pca_norm',
         'normalized_displacement_norm',
         'jacobian_hidden',
         'jacobian_hidden_sym',
@@ -382,9 +401,9 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
         columns=columns,
         dtype=np.float16)
     for column in ['initial_sampled_state', 'second_sampled_state', 'initial_pca_sampled_state',
-                   'final_sampled_state', 'final_pca_sampled_state', 'jacobian_hidden',
-                   'jacobian_hidden_sym', 'jacobian_hidden_eigenspectrum',
-                   'displacement']:
+                   'second_pca_sampled_state', 'final_sampled_state', 'final_pca_sampled_state',
+                   'jacobian_hidden', 'jacobian_hidden_sym', 'jacobian_hidden_eigenspectrum',
+                   'displacement', 'displacement_pca', 'final_sampled_state_next_state']:
         fixed_point_df[column] = fixed_point_df[column].astype(object)
 
     print(f'Computing fixed points using {num_grad_steps} gradient steps')
@@ -398,6 +417,11 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
             num_grad_steps=num_grad_steps)
         stimulus = model_fixed_points_results['stimulus']
         feedback = model_fixed_points_results['feedback']
+        initial_pca_sampled_states = pca.transform(sampled_states)
+        second_sampled_states = model_fixed_points_results['second_states']
+        second_pca_sampled_states = pca.transform(
+            second_sampled_states.reshape(len(second_sampled_states), -1))
+        displacement_pca = second_pca_sampled_states - initial_pca_sampled_states
         final_sampled_states = model_fixed_points_results['final_states']
         final_pca_sampled_states = pca.transform(
             final_sampled_states.reshape(len(final_sampled_states), -1))
@@ -408,13 +432,17 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
             'left_stimulus': stimulus[:, 0, 0],
             'right_stimulus': stimulus[:, 0, 1],
             'feedback': feedback[:, 0],
-            'initial_sampled_state': initial_sampled_states.numpy(),
-            'initial_pca_sampled_state': pca_sampled_states,
-            'second_sampled_state': model_fixed_points_results['second_states'],
+            'initial_sampled_state': np.expand_dims(sampled_states, 1),
+            'initial_pca_sampled_state': initial_pca_sampled_states,
+            'second_sampled_state': second_sampled_states,
+            'second_pca_sampled_state': second_pca_sampled_states,
             'final_sampled_state': final_sampled_states,
             'final_pca_sampled_state': final_pca_sampled_states,
+            'final_sampled_state_next_state': model_fixed_points_results['final_states_next_state'],
             'displacement': model_fixed_points_results['displacement'],
+            'displacement_pca': displacement_pca,
             'displacement_norm': model_fixed_points_results['displacement_norm'],
+            'displacement_pca_norm': np.linalg.norm(displacement_pca, axis=1),
             'normalized_displacement_norm': model_fixed_points_results['normalized_displacement_norm'],
             'jacobian_hidden': model_fixed_points_results['jacobian_hidden'],
             'jacobian_hidden_stable': model_fixed_points_results['jacobian_hidden_stable'],
@@ -436,7 +464,6 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
         jlm=jlm)
 
     fixed_points_basins_df = compute_model_fixed_points_basins_of_attraction(
-        model=model,
         fixed_point_df=fixed_point_df)
 
     model_fixed_points_results = dict(
@@ -451,7 +478,6 @@ def compute_model_fixed_points_jacobians(model,
                                          feedback,
                                          fixed_points,
                                          displacement_norm):
-
     model_jacobians_results = compute_model_hidden_state_jacobians(
         model=model,
         stimulus=stimulus,
@@ -486,7 +512,6 @@ def compute_model_fixed_points_jacobians(model,
 def compute_model_fixed_points_jacobians_projected(fixed_point_df,
                                                    pca,
                                                    jlm):
-
     # necessary because Pandas object series can't be directly convert to array
     jacobians = np.stack(fixed_point_df['jacobian_hidden'].values.tolist())
     jacobians_stable = fixed_point_df['jacobian_hidden_stable']
@@ -544,84 +569,84 @@ def compute_model_fixed_points_jacobians_projected(fixed_point_df,
             col_value.tolist(), index=fixed_point_df.index)
 
 
-def compute_model_hidden_state_vector_field(model,
-                                            session_data,
-                                            hidden_states,
-                                            pca,
-                                            pca_hidden_states):
-    columns = [
-        'session_data_indices',
-        'rnn_step_within_session',
-        'block_index',
-        'trial_index',
-        'rnn_step_index',
-        'block_side',
-        'trial_side',
-        'trial_strength',
-        'left_stimulus',
-        'right_stimulus',
-        'reward',
-        'correct_action_prob',
-        'left_action_prob',
-        'right_action_prob',
-        'hidden_state',
-        'pca_hidden_state',
-        'next_hidden_state',
-        'pca_next_hidden_state',
-        'hidden_state_difference']
-
-    vector_fields_df = pd.DataFrame(
-        columns=columns,
-        dtype=np.float16)
-
-    # enable storing hidden states in the dataframe.
-    # need to make the column have type object to doing so possible
-    for column in ['hidden_state', 'pca_hidden_state', 'next_hidden_state',
-                   'pca_next_hidden_state', 'hidden_state_difference']:
-        vector_fields_df[column] = vector_fields_df[column].astype(object)
-
-    # sample subset of indices
-    random_subset_indices = np.random.choice(
-        session_data.index,
-        replace=False,
-        size=min(1000, len(session_data)))
-
-    sampled_hidden_states = hidden_states[random_subset_indices]
-    sampled_pca_hidden_states = pca_hidden_states[random_subset_indices]
-
-    for feedback, stimulus in product(possible_feedback, possible_stimuli):
-        # shape: (len(random subset indices, 1)
-        feedback = torch.stack(len(random_subset_indices) * [feedback], dim=0)
-
-        # shape: (len(random subset indices), 1, 2)
-        stimulus = torch.stack(len(random_subset_indices) * [stimulus], dim=0).unsqueeze(1)
-
-        model_forward_output = run_model_one_step(
-            model=model,
-            stimulus=stimulus,
-            feedback=feedback,
-            hidden_states=torch.from_numpy(sampled_hidden_states))
-
-        next_sampled_hidden_states = model_forward_output['core_hidden'].detach().numpy()
-
-        next_sampled_pca_hidden_states = pca.transform(
-            next_sampled_hidden_states.reshape(len(random_subset_indices), -1))
-
-        displacement_vector = next_sampled_pca_hidden_states - sampled_pca_hidden_states
-
-        vector_fields_subrows_df = dict(
-            displacement_vector=displacement_vector,
-            random_subset_indices=random_subset_indices,
-            sampled_hidden_states=sampled_hidden_states,
-            sampled_pca_hidden_states=sampled_pca_hidden_states,
-            next_sampled_hidden_states=next_sampled_hidden_states,
-            next_sampled_pca_hidden_states=next_sampled_pca_hidden_states)
-
-        vector_fields_subrows_df = pd.DataFrame(vector_fields_subrows_df)
-
-        vector_fields_df = pd.concat((vector_fields_df, vector_fields_subrows_df))
-
-    return vector_fields_df
+# def compute_model_hidden_state_vector_field(model,
+#                                             session_data,
+#                                             hidden_states,
+#                                             pca,
+#                                             pca_hidden_states):
+#     columns = [
+#         'session_data_indices',
+#         'rnn_step_within_session',
+#         'block_index',
+#         'trial_index',
+#         'rnn_step_index',
+#         'block_side',
+#         'trial_side',
+#         'trial_strength',
+#         'left_stimulus',
+#         'right_stimulus',
+#         'reward',
+#         'correct_action_prob',
+#         'left_action_prob',
+#         'right_action_prob',
+#         'hidden_state',
+#         'pca_hidden_state',
+#         'next_hidden_state',
+#         'pca_next_hidden_state',
+#         'hidden_state_difference']
+#
+#     vector_fields_df = pd.DataFrame(
+#         columns=columns,
+#         dtype=np.float16)
+#
+#     # enable storing hidden states in the dataframe.
+#     # need to make the column have type object to doing so possible
+#     for column in ['hidden_state', 'pca_hidden_state', 'next_hidden_state',
+#                    'pca_next_hidden_state', 'hidden_state_difference']:
+#         vector_fields_df[column] = vector_fields_df[column].astype(object)
+#
+#     # sample subset of indices
+#     random_subset_indices = np.random.choice(
+#         session_data.index,
+#         replace=False,
+#         size=min(1000, len(session_data)))
+#
+#     sampled_hidden_states = hidden_states[random_subset_indices]
+#     sampled_pca_hidden_states = pca_hidden_states[random_subset_indices]
+#
+#     for feedback, stimulus in product(possible_feedback, possible_stimuli):
+#         # shape: (len(random subset indices, 1)
+#         feedback = torch.stack(len(random_subset_indices) * [feedback], dim=0)
+#
+#         # shape: (len(random subset indices), 1, 2)
+#         stimulus = torch.stack(len(random_subset_indices) * [stimulus], dim=0).unsqueeze(1)
+#
+#         model_forward_output = run_model_one_step(
+#             model=model,
+#             stimulus=stimulus,
+#             feedback=feedback,
+#             hidden_states=torch.from_numpy(sampled_hidden_states))
+#
+#         next_sampled_hidden_states = model_forward_output['core_hidden'].detach().numpy()
+#
+#         next_sampled_pca_hidden_states = pca.transform(
+#             next_sampled_hidden_states.reshape(len(random_subset_indices), -1))
+#
+#         displacement_vector = next_sampled_pca_hidden_states - sampled_pca_hidden_states
+#
+#         vector_fields_subrows_df = dict(
+#             displacement_vector=displacement_vector,
+#             random_subset_indices=random_subset_indices,
+#             sampled_hidden_states=sampled_hidden_states,
+#             sampled_pca_hidden_states=sampled_pca_hidden_states,
+#             next_sampled_hidden_states=next_sampled_hidden_states,
+#             next_sampled_pca_hidden_states=next_sampled_pca_hidden_states)
+#
+#         vector_fields_subrows_df = pd.DataFrame(vector_fields_subrows_df)
+#
+#         vector_fields_df = pd.concat((vector_fields_df, vector_fields_subrows_df))
+#
+#     return vector_fields_df
 
 
 def compute_model_hidden_states_johnson_lindenstrauss(hidden_states):
@@ -647,7 +672,6 @@ def compute_model_hidden_state_jacobians(model,
                                          stimulus,
                                          feedback,
                                          hidden_states):
-
     num_layers = model.model_kwargs['core_kwargs']['num_layers']
     hidden_size = model.model_kwargs['core_kwargs']['hidden_size']
     num_basis_vectors = num_layers * hidden_size
@@ -691,6 +715,17 @@ def compute_model_hidden_state_jacobians(model,
             jacobian_component = torch.mean(jacobian_component, dim=(1,))
             jacobian_components.append(jacobian_component)
         jacobian = torch.stack(jacobian_components, dim=1)
+
+        def model_wrapper(hidden_states_for_jacobian):
+            return run_model_one_step(
+                model=model,
+                stimulus=stimulus,
+                feedback=feedback,
+                hidden_states=hidden_states_for_jacobian)['core_output']
+
+        # jacobian2 = torch.autograd.functional.jacobian(
+        #     func=model_wrapper,
+        #     inputs=hidden_states)
 
         # because feedback has dim 2 instead of dim 3, the jacobian will be shape (hidden dim, )
         # add an extra dimension for consistency with other two Jacobians
@@ -816,11 +851,6 @@ def compute_model_weights_community_detection(model):
         model_weights_directed_graph,
         arrows=True)
 
-    import matplotlib.pyplot as plt
-    plt.show()
-
-    print(10)
-
 
 def compute_psytrack_fit(session_data):
     # need to add 1 because psytrack expects 1s & 2s, not 0s & 1s
@@ -923,23 +953,23 @@ def run_model_one_step(model,
 def sample_model_states_in_state_space(projection_obj,
                                        xrange,
                                        yrange,
-                                       projected_sampled_states):
+                                       pca_hidden_states):
     # projection_obj should be either pca, jlm, etc.
     # TODO: generalize to jlm
 
     # compute convex hull encompassing network activity
-    convex_hull = scipy.spatial.Delaunay(projected_sampled_states)
+    convex_hull = scipy.spatial.Delaunay(pca_hidden_states)
 
     # sample possible activity uniformly over the plane, then exclude points
     # outside the convex hull
     pc1_values, pc2_values = np.meshgrid(
         np.linspace(xrange[0], xrange[1], num=50),
         np.linspace(yrange[0], yrange[1], num=50))
-    projected_sampled_states = np.stack((pc1_values.flatten(), pc2_values.flatten())).T
-    in_hull_indices = test_points_in_hull(p=projected_sampled_states, hull=convex_hull)
-    projected_sampled_states = projected_sampled_states[in_hull_indices]
-    print('Number of sampled states: ', len(projected_sampled_states))
-    sampled_states = projection_obj.inverse_transform(projected_sampled_states)
+    pca_hidden_states = np.stack((pc1_values.flatten(), pc2_values.flatten())).T
+    in_hull_indices = test_points_in_hull(p=pca_hidden_states, hull=convex_hull)
+    pca_hidden_states = pca_hidden_states[in_hull_indices]
+    print('Number of sampled states: ', len(pca_hidden_states))
+    sampled_states = projection_obj.inverse_transform(pca_hidden_states)
     return sampled_states
 
 

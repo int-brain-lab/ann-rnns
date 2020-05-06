@@ -42,7 +42,6 @@ def create_hook_fns_dict(hook_fns_frequencies,
 
 def create_hook_fns_analyze(start_grad_step):
     hook_fns_frequencies = [
-        # (0, utils.plot.hook_plot_state_space_vector_fields),
         (0, hook_write_scalars),
         (0, utils.plot.hook_plot_task_block_side_trial_side_by_trial_number),
         (0, utils.plot.hook_plot_task_stimuli_by_block_side),
@@ -69,6 +68,7 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_state_space_trajectories_within_block),
         (0, utils.plot.hook_plot_state_space_trajectories_within_trial),
         (0, utils.plot.hook_plot_state_space_trials_by_classifier_and_trial_index),
+        (0, utils.plot.hook_plot_state_space_vector_fields),
         # (0, utils.plot.hook_plot_pca_hidden_state_trajectories_controlled),
         # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
         # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_time_constants),
