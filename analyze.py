@@ -3,7 +3,7 @@ import numpy as np
 import os
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.analysis import add_analysis_data_to_hook_input, nonlinear_control
+from utils.analysis import add_analysis_data_to_hook_input
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_analyze
 from utils.run import load_checkpoint, run_envs, set_seed, stitch_plots
@@ -92,8 +92,6 @@ def analyze_model(model,
         seed=seed)
 
     add_analysis_data_to_hook_input(hook_input=hook_input)
-
-    nonlinear_control(hook_input=hook_input)
 
     for hook_fn in hook_fns[start_grad_step]:
         hook_fn(hook_input)

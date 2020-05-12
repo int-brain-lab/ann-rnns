@@ -65,6 +65,7 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_state_space_effect_of_feedback),
         (0, utils.plot.hook_plot_state_space_fixed_point_basins_of_attraction),
         (0, utils.plot.hook_plot_state_space_fixed_point_search),
+        (0, utils.plot.hook_plot_state_space_reduced_dim_approximation),
         (0, utils.plot.hook_plot_state_space_trajectories_within_block),
         (0, utils.plot.hook_plot_state_space_trajectories_within_trial),
         (0, utils.plot.hook_plot_state_space_trials_by_classifier_and_trial_index),

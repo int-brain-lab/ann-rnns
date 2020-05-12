@@ -134,8 +134,8 @@ def load_checkpoint(train_log_dir,
     del env_kwargs['batch_size']
 
     # replace some defaults
-    env_kwargs['blocks_per_session'] = 500
-    # env_kwargs['blocks_per_session'] = 15
+    # env_kwargs['blocks_per_session'] = 500
+    env_kwargs['blocks_per_session'] = 50
 
     return model, optimizer, global_step, env_kwargs
 

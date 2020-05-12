@@ -4,7 +4,7 @@ import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.analysis import compute_eigenvalues_svd
+from utils.analysis import compute_eigenvalues
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_train
 from utils.run import create_model, create_optimizer, run_envs, set_seed
@@ -99,7 +99,7 @@ def train_model(model,
                 tag_prefix=tag_prefix,
                 seed=seed)
 
-            eigenvalues_svd_results = compute_eigenvalues_svd(
+            eigenvalues_svd_results = compute_eigenvalues(
                 matrix=hook_input['hidden_states'].reshape(hook_input['hidden_states'].shape[0], -1))
 
             hook_input.update(eigenvalues_svd_results)

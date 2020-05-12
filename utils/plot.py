@@ -12,7 +12,7 @@ import seaborn as sns
 import utils.analysis
 
 # increase resolution
-plt.rcParams['figure.dpi'] = 200.
+plt.rcParams['figure.dpi'] = 300.
 plt.rcParams['font.size'] = 4
 
 
@@ -1341,6 +1341,44 @@ def hook_plot_state_space_fixed_point_search(hook_input):
 
     hook_input['tensorboard_writer'].add_figure(
         tag=f'state_space_fixed_point_search',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_state_space_reduced_dim_approximation(hook_input):
+
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.set_title(r'Distance (L2) by Elapsed Time ($\Delta$)')
+    ax.set_xlabel(r'Elapsed Time ($\Delta$)  - Jitter=0.1')
+    ax.set_ylabel('Distance (L2)')
+    fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+    for i, (trajectory_name, trajectory_error) in enumerate(hook_input['error_accumulation_df'].groupby(['name'])):
+        if trajectory_name == 'hidden_states':
+            label = r'$||h_{n+\Delta} - h_n||_2$'
+        elif trajectory_name == 'pca_hidden_states':
+            label = r'$||P h_{n+\Delta} - P h_n||_2$'
+        elif trajectory_name == 'pca_model_states':
+            label = r'$||h_{n+\Delta}^{\prime} - h_n^{\prime}||_2$'
+        elif trajectory_name == 'model_states':
+            label = r'$||P^{-1} h_{n+\Delta}^{\prime} - P^{-1} h_n^{\prime}||_2$'
+        else:
+            raise ValueError('Invalid trajectory name')
+        jitter = i*0.1
+        ax.plot(
+            jitter + trajectory_error.delta,
+            trajectory_error.norm_mean,
+            label=label)
+        ax.fill_between(
+            x=jitter + trajectory_error.delta,
+            y1=trajectory_error.norm_mean - trajectory_error.norm_var,
+            y2=trajectory_error.norm_mean + trajectory_error.norm_var,
+            alpha=0.1,
+            linewidth=0)
+    ax.set_yscale('log')
+    ax.legend()
+    hook_input['tensorboard_writer'].add_figure(
+        tag='state_space_reduced_dim_approximation',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)

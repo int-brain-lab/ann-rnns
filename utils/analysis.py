@@ -11,6 +11,8 @@ import re
 from scipy.linalg import solve_discrete_lyapunov
 import scipy.spatial
 from sklearn.decomposition.pca import PCA
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
 from sklearn.random_projection import GaussianRandomProjection
 import statsmodels.api as sm
 import torch
@@ -69,8 +71,12 @@ def add_analysis_data_to_hook_input(hook_input):
         block_readout_vector=model_readout_vectors_results['block_readout_vector'],
         num_grad_steps=500)
 
-    eigenvalues_svd_results = compute_eigenvalues_svd(
+    eigenvalues_svd_results = compute_eigenvalues(
         matrix=reshaped_hidden_states)
+
+    reduced_dynamics_result = fit_reduced_dim_dynamics(
+        session_data=hook_input['session_data'],
+        pca=hidden_states_pca_results['pca'])
 
     # add results to hook_input
     result_dicts = [
@@ -78,28 +84,26 @@ def add_analysis_data_to_hook_input(hook_input):
         hidden_states_pca_results,
         model_readout_vectors_results,
         fixed_points_results,
-        eigenvalues_svd_results]
+        eigenvalues_svd_results,
+        reduced_dynamics_result]
     for result_dict in result_dicts:
         hook_input.update(result_dict)
 
 
-def compute_eigenvalues_svd(matrix):
+def compute_eigenvalues(matrix):
     """
     matrix should have shape (num_samples, num_features)
     """
-    feature_means = np.mean(matrix, axis=0)
-    s = np.linalg.svd(matrix - feature_means, full_matrices=False, compute_uv=False)
-
-    # eigenvalues
-    variance_explained = np.power(s, 2) / (matrix.shape[0] - 1)
+    pca = PCA()
+    pca.fit(matrix)
+    variance_explained = np.sort(pca.explained_variance_)[::-1]
     frac_variance_explained = np.cumsum(variance_explained / np.sum(variance_explained))
 
-    eigenvalues_svd_results = dict(
+    eigenvalues_results = dict(
         variance_explained=variance_explained,
-        frac_variance_explained=frac_variance_explained
-    )
+        frac_variance_explained=frac_variance_explained)
 
-    return eigenvalues_svd_results
+    return eigenvalues_results
 
 
 # def compute_projected_hidden_state_trajectory_controlled(model,
@@ -478,6 +482,7 @@ def compute_model_fixed_points_jacobians(model,
                                          feedback,
                                          fixed_points,
                                          displacement_norm):
+
     model_jacobians_results = compute_model_hidden_state_jacobians(
         model=model,
         stimulus=stimulus,
@@ -492,7 +497,7 @@ def compute_model_fixed_points_jacobians(model,
     model_jacobians_results['jacobian_hidden_stable'] = np.logical_and(
         np.all(np.abs(np.real(model_jacobians_results['jacobian_hidden_eigenspectrum'])) < 1,
                axis=1),
-        displacement_norm < np.quantile(displacement_norm, .01)).astype(np.float16)
+        displacement_norm < np.quantile(displacement_norm, .05)).astype(np.float16)
 
     jacobians_hidden_sym = 0.5 * (
             jacobians_hidden + np.transpose(jacobians_hidden, axes=(0, 2, 1)))
@@ -504,7 +509,7 @@ def compute_model_fixed_points_jacobians(model,
     model_jacobians_results['jacobian_hidden_sym_stable'] = np.logical_and(
         np.all(np.abs(np.real(model_jacobians_results['jacobian_hidden_sym_eigenspectrum'])) < 1,
                axis=1),
-        displacement_norm < 0.01).astype(np.float16)
+        np.quantile(displacement_norm, .05)).astype(np.float16)
 
     return model_jacobians_results
 
@@ -532,7 +537,7 @@ def compute_model_fixed_points_jacobians_projected(fixed_point_df,
         axis=(1, 2))
     jacobians_pca_stable = np.logical_and(
         np.all(np.abs(np.real(jacobians_pca_eigenspectra)) < 1, axis=1),
-        pca_displacement_norm < np.quantile(pca_displacement_norm, .01),
+        pca_displacement_norm < np.quantile(pca_displacement_norm, .05),
     ).astype(np.float16)
     print('Fraction of stable PCA Jacobians: ', np.mean(jacobians_pca_stable))
 
@@ -549,7 +554,7 @@ def compute_model_fixed_points_jacobians_projected(fixed_point_df,
         axis=(1, 2))
     jacobians_jlm_stable = np.logical_and(
         np.all(np.abs(np.real(jacobians_jlm_eigenspectra)) < 1, axis=1),
-        jlm_displacement_norm < np.quantile(jlm_displacement_norm, .01),
+        jlm_displacement_norm < np.quantile(jlm_displacement_norm, .05),
     ).astype(np.float16)
     print('Fraction of stable JL Jacobians: ', np.mean(jacobians_jlm_stable))
 
@@ -903,10 +908,122 @@ def compute_psytrack_fit(session_data):
     return psytrack_fit_output
 
 
-def nonlinear_control(hook_input):
-    import matplotlib.pyplot as plt
+def fit_reduced_dim_dynamics(session_data,
+                             pca):
+    left_stimulus = np.expand_dims(
+        session_data['left_stimulus'].values,
+        axis=1)
+    right_stimulus = np.expand_dims(
+        session_data['right_stimulus'].values,
+        axis=1)
+    feedback = np.expand_dims(
+        session_data['reward'].shift(1).fillna(0),
+        axis=1)
+    action_side = np.expand_dims(
+        session_data['action_side'].shift(1).fillna(0),
+        axis=1)
+    feedback_action_side = np.multiply(feedback, action_side)
+    hidden_states = session_data['hidden_state'].values.tolist()
+    hidden_states = np.stack(
+        [np.zeros_like(hidden_states[0])] + hidden_states).squeeze(1)
+    pca_hidden_states = pca.transform(hidden_states)
+    # normalize to ensure f() is invertible (in this case, tanh)
+    # multiply by 1.01 to ensure abs(value) < 1
+    max_pca_hidden_states = 1.01*np.max(np.abs(pca_hidden_states))
+    pca_hidden_states /= max_pca_hidden_states
 
-    print(10)
+    input_pca_hidden_states = pca_hidden_states[:-1, :]
+    # project f^{-1}(h_n) = Ax + Bu to low dimension
+    # y is target i.e. inverted PCA hidden states
+    y = np.arctanh(pca_hidden_states[1:, :])
+    X = np.concatenate(
+        (input_pca_hidden_states, left_stimulus, right_stimulus, feedback,
+         feedback_action_side),
+        axis=1)
+
+    condition_names = ['feedback', 'nofeedback']
+    condition_indices = [
+        np.squeeze(feedback, axis=1) != 0.,
+        np.squeeze(feedback, axis=1) == 0.]
+    condition_results = dict()
+    for condition_name, condition_idx in zip(condition_names, condition_indices):
+        X_train, X_test, y_train, y_test = train_test_split(
+            X[condition_idx],
+            y[condition_idx],
+            test_size=.33)
+        lr = LinearRegression(fit_intercept=True, normalize=True)
+        lr.fit(X=X_train, y=y_train)
+        A_prime, B_prime = lr.coef_[:, :2], lr.coef_[:, 2:]
+        r_squared = lr.score(X_test, y_test)
+        print('Condition Name:', condition_name)
+        print('Num samples: ', np.sum(condition_idx))
+        print('R^2: ', r_squared)
+        print('A prime:\n', A_prime)
+        print('B prime:\n', B_prime)
+        condition_results[condition_name] = dict(
+            A_prime=A_prime,
+            B_prime=B_prime,
+            r_squared=r_squared,
+            num_train_samples=len(X_train),
+            num_test_samples=len(X_test))
+
+    # average results
+    A_prime = (condition_results['feedback']['A_prime'] +
+               condition_results['nofeedback']['A_prime']) / 2
+    # B_prime is over two conditions, so don't average, just add
+    B_prime = (condition_results['feedback']['B_prime'] +
+               condition_results['nofeedback']['B_prime'])
+
+    print('A prime:\n', A_prime)
+    print('B prime:\n', B_prime)
+
+    pca_model_states = np.zeros_like(pca_hidden_states)
+    pca_model_state = np.zeros(2)
+    inputs = X[:, 2:]
+    for i in range(len(pca_model_states) - 1):
+        pca_model_state = np.tanh(A_prime @ pca_model_state + B_prime @ inputs[i, :])
+        pca_model_states[i+1, :] = pca_model_state
+
+    pca_hidden_states *= max_pca_hidden_states
+    pca_model_states *= max_pca_hidden_states
+    model_states = pca.inverse_transform(pca_model_states)
+
+    trajectory_names = ['hidden_states', 'pca_hidden_states', 'pca_model_states',
+                        'model_states']
+    trajectories = [hidden_states, pca_hidden_states, pca_model_states,
+                    model_states]
+    max_delta = 20
+    error_accumulation_df = pd.DataFrame(
+        np.nan,
+        columns=['name', 'delta', 'norm_mean', 'norm_var'],
+        index=np.arange(len(trajectories) * max_delta))
+    error_accumulation_df.name = error_accumulation_df.name.astype(np.object)
+    i = 0
+    for trajectory_name, trajectory in zip(trajectory_names, trajectories):
+        for delta in range(max_delta):
+            # numpy diff strangely return array if n=0, instead of all zeros
+            if delta == 0:
+                diffs = np.zeros_like(trajectory)
+            else:
+                diffs = np.diff(trajectory, n=delta, axis=0)
+            diffs_norms = np.linalg.norm(diffs, axis=1)
+            norm_mean = np.mean(diffs_norms) / np.sqrt(trajectory.shape[1])
+            norm_var = np.var(diffs_norms) / np.sqrt(trajectory.shape[1])
+
+            error_accumulation_df.at[i, 'name'] = trajectory_name
+            error_accumulation_df.at[i, 'delta'] = delta
+            error_accumulation_df.at[i, 'norm_mean'] = norm_mean
+            error_accumulation_df.at[i, 'norm_var'] = norm_var
+            i += 1
+
+    reduced_dynamics_result = dict(
+        A_prime=A_prime,
+        B_prime=B_prime,
+        condition_results=condition_results,
+        error_accumulation_df=error_accumulation_df)
+
+    return reduced_dynamics_result
+
 
 
 def run_model_one_step(model,
