@@ -86,6 +86,9 @@ def extract_session_data(envs):
     session_data['signed_trial_strength'] = session_data['trial_strength'] * \
                                             session_data['trial_side']
 
+    session_data['concordant_sides'] = session_data['trial_side'] == \
+                                       session_data['block_side']
+
     # make trial side, block side orthogonal
     block_sides = session_data.block_side.values
     trial_sides = session_data.trial_side.values
@@ -134,8 +137,8 @@ def load_checkpoint(train_log_dir,
     del env_kwargs['batch_size']
 
     # replace some defaults
-    # env_kwargs['blocks_per_session'] = 500
-    env_kwargs['blocks_per_session'] = 50
+    env_kwargs['blocks_per_session'] = 600
+    # env_kwargs['blocks_per_session'] = 50
 
     return model, optimizer, global_step, env_kwargs
 

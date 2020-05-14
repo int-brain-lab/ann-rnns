@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import sys
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.analysis import add_analysis_data_to_hook_input
@@ -13,10 +14,13 @@ def main():
     seed = 1
     set_seed(seed=seed)
 
-    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-04-20 18:12:18.249703'
+    run_dir = 'rnn, block_side_probs=0.50, snr=0.9'
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
+
+    # set stdout to specified text file
+    sys.stdout = open(os.path.join(analyze_log_dir, 'stdout.txt'), 'w')
 
     model, optimizer, grad_step, env_kwargs = load_checkpoint(
         train_log_dir=train_log_dir,
@@ -110,3 +114,4 @@ def analyze_model(model,
 
 if __name__ == '__main__':
     main()
+
