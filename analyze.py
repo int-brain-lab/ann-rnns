@@ -1,3 +1,4 @@
+import logging
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -7,20 +8,18 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.analysis import add_analysis_data_to_hook_input
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_analyze
-from utils.run import load_checkpoint, run_envs, set_seed, stitch_plots
+from utils.run import create_logger, load_checkpoint, run_envs, set_seed, stitch_plots
 
 
 def main():
-    seed = 1
-    set_seed(seed=seed)
 
-    run_dir = 'rnn, block_side_probs=0.50, snr=0.9'
+    run_dir = 'rnn, block_side_probs=0.80, snr=0.9'
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
-
-    # set stdout to specified text file
-    sys.stdout = open(os.path.join(analyze_log_dir, 'stdout.txt'), 'w')
+    create_logger(log_dir=analyze_log_dir)
+    seed = 1
+    set_seed(seed=seed)
 
     model, optimizer, grad_step, env_kwargs = load_checkpoint(
         train_log_dir=train_log_dir,

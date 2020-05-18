@@ -7,7 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.analysis import compute_eigenvalues
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_train
-from utils.run import create_model, create_optimizer, run_envs, set_seed
+from utils.run import create_logger, create_model, create_optimizer, run_envs, set_seed
 
 
 def main():
@@ -16,8 +16,9 @@ def main():
 
     model = create_model()
 
-    log_dir = os.path.join('runs', model.description_str + '_' + str(datetime.now()))
-    tensorboard_writer = SummaryWriter(log_dir=log_dir)
+    train_log_dir = os.path.join('runs', model.description_str + '_' + str(datetime.now()))
+    tensorboard_writer = SummaryWriter(log_dir=train_log_dir)
+    create_logger(log_dir=train_log_dir)
 
     optimizer = create_optimizer(
         model=model,

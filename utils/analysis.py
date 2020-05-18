@@ -1,13 +1,13 @@
 import community
 from itertools import product
-import pandas as pd
+import logging
 import networkx as nx
 import networkx.algorithms.community
 import networkx.drawing
 import numpy as np
+import pandas as pd
 from psytrack.helper.invBlkTriDiag import getCredibleInterval
 from psytrack.hyperOpt import hyperOpt
-import re
 from scipy.linalg import solve_discrete_lyapunov
 import scipy.spatial
 from scipy.stats import norm
@@ -47,17 +47,19 @@ def add_analysis_data_to_hook_input(hook_input):
         hook_input['hidden_states'].shape[0], -1)
 
     hidden_states_pca_results = compute_model_hidden_states_pca(
-        hidden_states=reshaped_hidden_states)
-
-    hidden_states_jl_results = compute_model_hidden_states_johnson_lindenstrauss(
-        hidden_states=reshaped_hidden_states)
-
-    model_readout_vectors_results = compute_model_readout_vectors(
-        session_data=hook_input['session_data'],
         hidden_states=reshaped_hidden_states,
-        model_readout_weights=hook_input['model'].readout.weight.data.numpy(),
+        model_readout_weights=hook_input['model'].readout.weight.data.numpy())
+
+    hidden_states_jl_results = compute_model_hidden_states_jl(
+        hidden_states=reshaped_hidden_states,
+        model_readout_weights=hook_input['model'].readout.weight.data.numpy())
+
+    model_block_readout_vectors_results = compute_model_block_readout_vectors(
+        session_data=hook_input['session_data'],
         pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
-        pca=hidden_states_pca_results['pca'])
+        pca=hidden_states_pca_results['pca'],
+        trial_readout_vector=hidden_states_pca_results['trial_readout_vector'],
+        pca_trial_readout_vector=hidden_states_pca_results['pca_trial_readout_vector'])
 
     fixed_points_results = compute_model_fixed_points_by_stimulus_and_feedback(
         model=hook_input['model'],
@@ -68,8 +70,8 @@ def add_analysis_data_to_hook_input(hook_input):
         jlm_xrange=hidden_states_jl_results['jl_xrange'],
         jlm_yrange=hidden_states_jl_results['jl_yrange'],
         pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
-        trial_readout_vector=model_readout_vectors_results['trial_readout_vector'],
-        block_readout_vector=model_readout_vectors_results['block_readout_vector'],
+        trial_readout_vector=hidden_states_pca_results['trial_readout_vector'],
+        block_readout_vector=model_block_readout_vectors_results['block_readout_vector'],
         num_grad_steps=500)
 
     eigenvalues_svd_results = compute_eigenvalues(
@@ -78,8 +80,7 @@ def add_analysis_data_to_hook_input(hook_input):
     reduced_dynamics_results = fit_reduced_dim_dynamics(
         session_data=hook_input['session_data'],
         pca=hidden_states_pca_results['pca'],
-        trial_readout_vector=model_readout_vectors_results['trial_readout_vector'],
-        block_readout_vector=model_readout_vectors_results['block_readout_vector'])
+        task_aligned_hidden_states=model_block_readout_vectors_results['task_aligned_hidden_states'])
 
     model_state_space_vector_fields_results = compute_model_state_space_vector_fields(
         session_data=hook_input['session_data'],
@@ -94,7 +95,7 @@ def add_analysis_data_to_hook_input(hook_input):
     result_dicts = [
         hidden_states_jl_results,
         hidden_states_pca_results,
-        model_readout_vectors_results,
+        model_block_readout_vectors_results,
         fixed_points_results,
         eigenvalues_svd_results,
         reduced_dynamics_results,
@@ -187,11 +188,11 @@ def compute_model_fixed_points(model,
         loss.backward()
         optimizer.step()
 
-    print('Stimulus val: ', stimulus_val.numpy(), '\t\tFeedback val: ', feedback_val.numpy())
+    logging.info(f'Stimulus val: {stimulus_val.numpy()}\t\tFeedback val: {feedback_val.numpy()}')
     normalized_displacement_norm = torch.div(
         displacement_norm,
         torch.norm(final_states, dim=(1, 2)))
-    print('Minimum displacement norm: ', torch.min(displacement_norm).item())
+    logging.info(f'Minimum displacement norm: {torch.min(displacement_norm).item()}')
 
     model_fixed_points_results = dict(
         second_states=second_states.detach().numpy(),
@@ -252,7 +253,7 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df):
         fixed_points_basins_df.at[i, 'right_stimulus'] = rstim
         fixed_points_basins_df.at[i, 'feedback'] = fdbk
 
-        print('Lstim: ', lstim, '\t\tRstim: ', rstim, '\t\tFdbk: ', fdbk)
+        logging.info(f'Lstim: {lstim}\t\tRstim: {rstim}\t\tFdbk: {fdbk}')
 
         # Jacobian and PCA Jacobian must be asymptotically stable
         stable_fp_df = fixed_point_subset_df[
@@ -260,7 +261,7 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df):
             (fixed_point_subset_df['jacobian_pca_stable'] == 1)]
 
         if len(stable_fp_df) == 0:
-            print('No stable fixed points')
+            logging.info('No stable fixed points')
             continue
 
         # filter for MOST fixed point
@@ -288,10 +289,10 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df):
             -lambda_max_P,
             -2 * lambda_max_P * np.sqrt(lambda_max_ATA),
             lambda_min_Q]))
-        print('Gamma: ', gamma)
+        logging.info(f'Gamma: {gamma}')
 
         if gamma <= 0:
-            print('No positive roots found for gamma')
+            logging.info('No positive roots found for gamma')
             continue
 
         initial_sampled_states = np.stack(
@@ -324,7 +325,7 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df):
         x_norm = np.linalg.norm(coord_transform_initial_states, axis=(1, 2))
 
         meets_criterion_indices = g_x_norm < (gamma * x_norm)
-        print('Fraction of points meeting criterion: ', np.mean(meets_criterion_indices))
+        logging.info(f'Fraction of points meeting criterion: {np.mean(meets_criterion_indices)}')
 
         if not np.any(meets_criterion_indices):
             continue
@@ -424,7 +425,7 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
                    'displacement', 'displacement_pca', 'final_sampled_state_next_state']:
         fixed_point_df[column] = fixed_point_df[column].astype(object)
 
-    print(f'Computing fixed points using {num_grad_steps} gradient steps')
+    logging.info(f'Computing fixed points using {num_grad_steps} gradient steps')
     for row_group, (feedback_val, stimulus_val) in enumerate(zip(possible_feedback, possible_stimuli)):
 
         model_fixed_points_results = compute_model_fixed_points(
@@ -533,8 +534,7 @@ def compute_model_fixed_points_jacobians_projected(fixed_point_df,
     # necessary because Pandas object series can't be directly convert to array
     jacobians = np.stack(fixed_point_df['jacobian_hidden'].values.tolist())
     jacobians_stable = fixed_point_df['jacobian_hidden_stable']
-    print('Fraction of stable Jacobians: ',
-          np.mean(jacobians_stable))
+    logging.info(f'Fraction of stable Jacobians: {np.mean(jacobians_stable)}')
 
     displacement = np.stack(fixed_point_df['displacement'].values.tolist())
     jacobians_pca = pca.components_ @ jacobians @ pca.components_.T
@@ -552,7 +552,7 @@ def compute_model_fixed_points_jacobians_projected(fixed_point_df,
         np.all(np.abs(np.real(jacobians_pca_eigenspectra)) < 1, axis=1),
         pca_displacement_norm < np.quantile(pca_displacement_norm, .05),
     ).astype(np.float16)
-    print('Fraction of stable PCA Jacobians: ', np.mean(jacobians_pca_stable))
+    logging.info(f'Fraction of stable PCA Jacobians: {np.mean(jacobians_pca_stable)}')
 
     jacobians_jlm = jlm.components_ @ jacobians @ jlm.components_.T
     jacobians_jlm_eigenspectra = np.sort(np.stack(
@@ -569,7 +569,7 @@ def compute_model_fixed_points_jacobians_projected(fixed_point_df,
         np.all(np.abs(np.real(jacobians_jlm_eigenspectra)) < 1, axis=1),
         jlm_displacement_norm < np.quantile(jlm_displacement_norm, .05),
     ).astype(np.float16)
-    print('Fraction of stable JL Jacobians: ', np.mean(jacobians_jlm_stable))
+    logging.info(f'Fraction of stable JL Jacobians: {np.mean(jacobians_jlm_stable)}')
 
     col_names = [
         'jacobian_pca', 'jacobian_pca_eigenspectrum', 'jacobian_pca_stable',
@@ -667,12 +667,30 @@ def compute_model_fixed_points_jacobians_projected(fixed_point_df,
 #     return vector_fields_df
 
 
-def compute_model_hidden_states_johnson_lindenstrauss(hidden_states):
+def compute_model_hidden_states_jl(hidden_states,
+                                   model_readout_weights):
     # ensure hidden states have 2 dimensions
     assert len(hidden_states.shape) == 2
-    jlmatrix = GaussianRandomProjection(n_components=2)
-    jlmatrix.fit(hidden_states)
-    jl_hidden_states = jlmatrix.fit_transform(hidden_states)
+    jlm = GaussianRandomProjection(n_components=2)
+    jlm.fit(hidden_states)
+
+    # ensure right trial vector points to the right
+    trial_readout_vector = model_readout_weights[-1, np.newaxis, :]
+    trial_readout_vector /= np.linalg.norm(trial_readout_vector)
+    jl_trial_readout_vector = jlm.transform(trial_readout_vector)[0]
+    jl_trial_readout_vector /= np.linalg.norm(jl_trial_readout_vector)
+
+    right_trial_vector_points_right = np.dot(
+        jl_trial_readout_vector,
+        [1., 0]) > 0
+    if not right_trial_vector_points_right:
+        logging.info('Swapped JL right readout vector direction')
+        jlm.components_[0] *= -1.
+        jl_trial_readout_vector *= -1
+    else:
+        logging.info('Did not swap JL right readout vector direction')
+
+    jl_hidden_states = jlm.transform(hidden_states)
 
     min_x, max_x = min(jl_hidden_states[:, 0]), max(jl_hidden_states[:, 0])
     min_y, max_y = min(jl_hidden_states[:, 1]), max(jl_hidden_states[:, 1])
@@ -681,7 +699,9 @@ def compute_model_hidden_states_johnson_lindenstrauss(hidden_states):
         jl_hidden_states=jl_hidden_states,
         jl_xrange=(min_x, max_x),
         jl_yrange=(min_y, max_y),
-        jlm=jlmatrix)
+        jlm=jlm,
+        trial_readout_vector=trial_readout_vector,
+        jl_trial_readout_vector=jl_trial_readout_vector)
 
     return hidden_states_pca_results
 
@@ -759,11 +779,30 @@ def compute_model_hidden_state_jacobians(model,
     return model_jacobians_results
 
 
-def compute_model_hidden_states_pca(hidden_states):
+def compute_model_hidden_states_pca(hidden_states,
+                                    model_readout_weights):
+
     # ensure hidden states have 2 dimensions
     assert len(hidden_states.shape) == 2
     pca = PCA(n_components=2)
     pca.fit(hidden_states)
+
+    # ensure right trial vector points to the right
+    trial_readout_vector = model_readout_weights[-1, np.newaxis, :]
+    trial_readout_vector /= np.linalg.norm(trial_readout_vector)
+    pca_trial_readout_vector = pca.transform(trial_readout_vector)[0]
+    pca_trial_readout_vector /= np.linalg.norm(pca_trial_readout_vector)
+
+    right_trial_vector_points_right = np.dot(
+        pca_trial_readout_vector,
+        [1., 0]) > 0
+    if not right_trial_vector_points_right:
+        logging.info('Swapped PCA right readout vector direction')
+        pca.components_[0] *= -1.
+        pca_trial_readout_vector *= -1
+    else:
+        logging.info('Did not swap PCA right readout vector direction')
+
     pca_hidden_states = pca.transform(hidden_states)
 
     min_x, max_x = min(pca_hidden_states[:, 0]), max(pca_hidden_states[:, 0])
@@ -773,35 +812,20 @@ def compute_model_hidden_states_pca(hidden_states):
         pca_hidden_states=pca_hidden_states,
         pca_xrange=(min_x, max_x),
         pca_yrange=(min_y, max_y),
-        pca=pca)
+        pca=pca,
+        trial_readout_vector=trial_readout_vector,
+        pca_trial_readout_vector=pca_trial_readout_vector)
 
     return hidden_states_pca_results
 
 
-def compute_model_readout_vectors(session_data,
-                                  model_readout_weights,
-                                  hidden_states,
-                                  pca_hidden_states,
-                                  pca):
+def compute_model_block_readout_vectors(session_data,
+                                        pca_hidden_states,
+                                        pca,
+                                        trial_readout_vector,
+                                        pca_trial_readout_vector):
+
     block_sides = session_data.block_side.values
-    trial_sides = session_data.trial_side.values
-
-    # select RIGHT trial side readout vector
-    trial_readout_vector = model_readout_weights[-1, np.newaxis, :]
-    trial_readout_vector /= np.linalg.norm(trial_readout_vector)
-    pca_trial_readout_vector = pca.transform(trial_readout_vector)[0]
-    pca_trial_readout_vector /= np.linalg.norm(pca_trial_readout_vector)
-
-    # ensure PCs match right trial side; otherwise, reflect PCs
-    mean_right_trial_hidden_state_projection_onto_right_readout_weight = np.dot(
-        pca_hidden_states[trial_sides == 1],
-        pca_trial_readout_vector).mean()
-    if mean_right_trial_hidden_state_projection_onto_right_readout_weight < 0:
-        print('Swapped readout vector direction')
-        pca.components_ *= -1.
-        pca_trial_readout_vector *= -1
-    else:
-        print('Did not swap readout vector direction')
 
     # select RIGHT block side readout vector
     logistic_regression = sm.Logit(
@@ -823,7 +847,7 @@ def compute_model_readout_vectors(session_data,
     degrees_btwn_trial_block_vectors = round(
         180 * radians_btwn_trial_block_vectors / np.pi)
 
-    print(f'Degrees between vectors: {degrees_btwn_trial_block_vectors}')
+    logging.info(f'Degrees between vectors: {degrees_btwn_trial_block_vectors}')
 
     radians_btwn_pca_trial_block_vectors = np.arccos(np.dot(
         pca_block_readout_vector / np.linalg.norm(pca_block_readout_vector),
@@ -832,16 +856,14 @@ def compute_model_readout_vectors(session_data,
     degrees_btwn_pca_trial_block_vectors = round(
         180 * radians_btwn_pca_trial_block_vectors / np.pi)
 
-    print(f'Degrees between PCA vectors: {degrees_btwn_pca_trial_block_vectors}')
+    logging.info(f'Degrees between PCA vectors: {degrees_btwn_pca_trial_block_vectors}')
 
-    task_aligned_directions = np.concatenate([
-        trial_readout_vector,
-        block_readout_vector])
-    task_aligned_hidden_states = hidden_states @ task_aligned_directions.T
+    task_aligned_directions = np.stack([
+        pca_trial_readout_vector,
+        pca_block_readout_vector])
+    task_aligned_hidden_states = pca_hidden_states @ task_aligned_directions.T
 
     block_readout_weights_results = dict(
-        trial_readout_vector=trial_readout_vector,
-        pca_trial_readout_vector=pca_trial_readout_vector,
         block_readout_vector=block_readout_vector,
         pca_block_readout_vector=pca_block_readout_vector,
         radians_btwn_pca_trial_block_vectors=radians_btwn_pca_trial_block_vectors,
@@ -961,6 +983,57 @@ def compute_model_weights_community_detection(model):
 def compute_optimal_observers(session_data,
                               time_delay_penalty,
                               rnn_steps_before_stimulus):
+
+    # import numpyro
+    # import numpyro.distributions
+    # from numpyro.infer import MCMC, NUTS
+    # from jax import lax, random
+    # import jax.numpy as np
+    #
+    # trial_end_data = session_data[session_data.trial_end == 1]
+    # trial_side = trial_end_data.trial_side
+    #
+    # def hidden_semi_markov_model(transition_prior,
+    #                              emission_prior,
+    #                              trial_side):
+    #
+    #     num_latents, num_obs = transition_prior.shape[0], emission_prior.shape[0]
+    #     transition_prob = numpyro.sample(
+    #         name='transition_prob',
+    #         fn=numpyro.distributions.Dirichlet(
+    #             np.broadcast_to(transition_prior,
+    #                             shape=(num_latents, num_latents))))
+    #     emission_prob = numpyro.sample(
+    #         name='emission_prob',
+    #         fn=numpyro.distributions.Dirichlet(
+    #             np.broadcast_to(emission_prior,
+    #                             shape=(num_latents, num_obs))))
+    #
+    #     # computes log prob of unsupervised data
+    #     transition_log_prob = np.log(transition_prob)
+    #     emission_log_prob = np.log(emission_prob)
+    #     init_log_prob = emission_log_prob[:, unsupervised_words[0]]
+    #     log_prob = forward_log_prob(init_log_prob, unsupervised_words[1:],
+    #                                 transition_log_prob, emission_log_prob)
+    #     log_prob = logsumexp(log_prob, axis=0, keepdims=True)
+    #     # inject log_prob to potential function
+    #     numpyro.factor('forward_log_prob', log_prob)
+    #
+    # rng_key = random.PRNGKey(seed=1)
+    # num_latents, num_obs = 2, 2
+    # transition_prior = np.ones(num_latents)
+    # emission_prior = np.repeat(0.1, num_obs)
+    # kernel = NUTS(hidden_semi_markov_model)
+    # mcmc = MCMC(
+    #     kernel,
+    #     num_warmup=500,
+    #     num_samples=1000,
+    #     progress_bar=True)
+    # mcmc.run(rng_key, transition_prior, emission_prior)
+    # samples = mcmc.get_samples()
+    # print_results(samples, transition_prob, emission_prob)
+    # print('\nMCMC elapsed time:', time.time() - start)
+
     optimal_prob_correct_after_num_obs_blockless, optimal_prob_correct_after_num_obs_blockless_by_trial_strength = \
         compute_optimal_prob_correct_blockless(
             session_data=session_data,
@@ -1037,7 +1110,7 @@ def compute_psytrack_fit(session_data):
     # need to add 1 because psytrack expects 1s & 2s, not 0s & 1s
     psytrack_model_choice = session_data['actions_chosen'].values[1:] + 1
     if np.var(psytrack_model_choice) < 0.025:
-        print('Model made only one action')
+        logging.info('Model made only one action')
         return
     psytrack_stimuli = session_data['stimuli'].values[1:].reshape(-1, 1)
     psytrack_rewards = session_data['rewards'].values[:-1].reshape(-1, 1)
@@ -1086,8 +1159,7 @@ def compute_psytrack_fit(session_data):
 
 def fit_reduced_dim_dynamics(session_data,
                              pca,
-                             trial_readout_vector,
-                             block_readout_vector):
+                             task_aligned_hidden_states):
     left_stimulus = np.expand_dims(
         session_data['left_stimulus'].values,
         axis=1)
@@ -1097,65 +1169,36 @@ def fit_reduced_dim_dynamics(session_data,
     feedback = np.expand_dims(
         session_data['reward'].shift(1).fillna(0),
         axis=1)
-    action_side = np.expand_dims(
-        session_data['action_side'].shift(1).fillna(0),
-        axis=1)
-    feedback_action_side = np.multiply(feedback, action_side)
-    hidden_states = session_data['hidden_state'].values.tolist()
-    hidden_states = np.stack(
-        [np.zeros_like(hidden_states[0])] + hidden_states).squeeze(1)
-    task_aligned_directions = np.concatenate([
-        trial_readout_vector,
-        block_readout_vector])
-    task_aligned_hidden_states = hidden_states @ task_aligned_directions.T
+    hidden_states = np.stack(session_data['hidden_state'].values.tolist()).squeeze(1)
+    # add a row of zeros
+    task_aligned_hidden_states = np.pad(
+        task_aligned_hidden_states,
+        pad_width=[(1, 0), (0, 0)])
+
     # normalize to ensure f() is invertible (in this case, tanh)
     # multiply by 1.01 to ensure abs(value) < 1
-    max_pca_hidden_states = 1.01 * np.max(np.abs(task_aligned_hidden_states))
-    task_aligned_hidden_states /= max_pca_hidden_states
+    max_task_aligned_hidden_states = 1.01 * np.max(np.abs(task_aligned_hidden_states))
+    task_aligned_hidden_states /= max_task_aligned_hidden_states
 
-    input_pca_hidden_states = task_aligned_hidden_states[:-1, :]
     # project f^{-1}(h_n) = Ax + Bu to low dimension
     # y is target i.e. inverted PCA hidden states
-    y = np.arctanh(task_aligned_hidden_states[1:, :])
+    y = np.arctanh(task_aligned_hidden_states[1:])
     X = np.concatenate(
-        (input_pca_hidden_states, left_stimulus, right_stimulus, feedback),
+        (task_aligned_hidden_states[:-1], left_stimulus, right_stimulus, feedback),
         axis=1)
 
-    condition_names = ['feedback', 'nofeedback']
-    condition_indices = [
-        np.squeeze(feedback, axis=1) != 0.,
-        np.squeeze(feedback, axis=1) == 0.]
-    condition_results = dict()
-    for condition_name, condition_idx in zip(condition_names, condition_indices):
-        X_train, X_test, y_train, y_test = train_test_split(
-            X[condition_idx],
-            y[condition_idx],
-            test_size=.33)
-        lr = LinearRegression(fit_intercept=True, normalize=True)
-        lr.fit(X=X_train, y=y_train)
-        A_prime, B_prime = lr.coef_[:, :2], lr.coef_[:, 2:]
-        r_squared = lr.score(X_test, y_test)
-        print('Condition Name:', condition_name)
-        print('Num samples: ', np.sum(condition_idx))
-        print('R^2: ', r_squared)
-        print('A prime:\n', A_prime)
-        print('B prime:\n', B_prime)
-        condition_results[condition_name] = dict(
-            A_prime=A_prime,
-            B_prime=B_prime,
-            r_squared=r_squared,
-            num_train_samples=len(X_train),
-            num_test_samples=len(X_test))
-
-    # average results
-    A_prime = (condition_results['feedback']['A_prime'] +
-               condition_results['nofeedback']['A_prime']) / 2
-    # B_prime is over two conditions, so don't average, just add
-    B_prime = (condition_results['feedback']['B_prime'] +
-               condition_results['nofeedback']['B_prime'])
-
-    print('A prime combined:\n', A_prime)
-    print('B prime combined:\n', B_prime)
+    # for condition_name, condition_idx in zip(condition_names, condition_indices):
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=.33)
+    lr = LinearRegression(fit_intercept=True, normalize=True)
+    lr.fit(X=X_train, y=y_train)
+    A_prime, B_prime = lr.coef_[:, :2], lr.coef_[:, 2:]
+    r_squared = lr.score(X_test, y_test)
+    logging.info(f'R^2: {r_squared}',)
+    logging.info(f'A prime:\n{A_prime}', )
+    logging.info(f'B prime:\n{B_prime}')
 
     task_aligned_model_states = np.zeros_like(task_aligned_hidden_states)
     task_aligned_model_state = np.zeros(2)
@@ -1173,8 +1216,8 @@ def fit_reduced_dim_dynamics(session_data,
         control_model_state = np.tanh(A_rand @ control_model_state + B_rand @ inputs[i, :])
         control_model_states[i + 1, :] = control_model_state
 
-    task_aligned_hidden_states *= max_pca_hidden_states
-    task_aligned_model_states *= max_pca_hidden_states
+    task_aligned_hidden_states *= max_task_aligned_hidden_states
+    task_aligned_model_states *= max_task_aligned_hidden_states
     model_states = pca.inverse_transform(task_aligned_model_states)
 
     trajectory_names = ['hidden_states', 'task_aligned_hidden_states', 'task_aligned_model_states',
@@ -1208,7 +1251,6 @@ def fit_reduced_dim_dynamics(session_data,
     reduced_dynamics_results = dict(
         A_prime=A_prime,
         B_prime=B_prime,
-        condition_results=condition_results,
         error_accumulation_df=error_accumulation_df)
 
     return reduced_dynamics_results
@@ -1273,7 +1315,7 @@ def sample_model_states_in_state_space(projection_obj,
     pca_hidden_states = np.stack((pc1_values.flatten(), pc2_values.flatten())).T
     in_hull_indices = test_points_in_hull(p=pca_hidden_states, hull=convex_hull)
     pca_hidden_states = pca_hidden_states[in_hull_indices]
-    print('Number of sampled states: ', len(pca_hidden_states))
+    logging.info(f'Number of sampled states: {len(pca_hidden_states)}')
     sampled_states = projection_obj.inverse_transform(pca_hidden_states)
     return sampled_states
 

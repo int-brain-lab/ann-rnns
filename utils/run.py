@@ -1,4 +1,5 @@
 import json
+import logging
 import numpy as np
 import os
 import pandas as pd
@@ -6,6 +7,14 @@ from PIL import Image
 import torch
 
 from utils.models import RecurrentModel
+
+
+def create_logger(log_dir):
+    logging.basicConfig(
+        filename=os.path.join(log_dir, 'logging.txt'),
+        level=logging.DEBUG)
+    # disable matplotlib font warnings
+    logging.getLogger('matplotlib.font_manager').disabled = True
 
 
 def create_model(model_str=None,
@@ -113,7 +122,7 @@ def load_checkpoint(train_log_dir,
     # select latest checkpoint path
     checkpoint_path = sorted(checkpoint_paths, key=os.path.getmtime)[-1]
 
-    print(f'Loading checkpoint at {checkpoint_path}')
+    logging.info(f'Loading checkpoint at {checkpoint_path}')
 
     save_dict = torch.load(checkpoint_path)
 
@@ -133,12 +142,13 @@ def load_checkpoint(train_log_dir,
         notes = json.load(notes_fp)
     env_kwargs = notes['env']
 
-    # remove batch size - will use hard coded constant for larger sample size
+    # remove batch size - will use single session with large number of blocks
     del env_kwargs['batch_size']
 
     # replace some defaults
-    env_kwargs['blocks_per_session'] = 600
-    # env_kwargs['blocks_per_session'] = 50
+    # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
+    env_kwargs['blocks_per_session'] = 800
+    # env_kwargs['blocks_per_session'] = 70
 
     return model, optimizer, global_step, env_kwargs
 
@@ -181,6 +191,9 @@ def run_envs(model,
     dts_by_trial = session_data.groupby([
         'session_index', 'block_index', 'trial_index']).size().mean()
 
+    logging.info('Fraction of Correct Actions Taken by Total Actions Taken: ' +
+                 str(correct_action_taken_by_action_taken))
+
     run_envs_output = dict(
         session_data=session_data,
         feedback_by_dt=feedback_by_dt,
@@ -200,6 +213,7 @@ def save_train_output(test_or_train_output):
 def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
+    logging.info(f'Seed: {seed}')
 
 
 def stitch_plots(log_dir):

@@ -1,3 +1,4 @@
+import logging
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
@@ -432,7 +433,7 @@ def hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration(hook_inp
     # only take consider last dt within a trial
     session_data = session_data[session_data['trial_end'] == 1]
 
-    num_trials_to_consider = 4
+    num_trials_to_consider = 10
 
     new_data = dict(
         prev_block_durations=[],
@@ -1380,6 +1381,7 @@ def hook_plot_state_space_projection_on_right_block_vector_by_trial_within_block
             mean_magn_along_block_vector_by_trial_index.index,
             mean_magn_along_block_vector_by_trial_index,
             '-o',
+            markersize=3,
             label=side_string_map[block_side] + ' Block',
             color=side_color_map[block_side])
 
