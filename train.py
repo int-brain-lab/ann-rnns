@@ -30,7 +30,7 @@ def main():
         num_sessions=1)
 
     start_grad_step = 0
-    num_grad_steps = 35001
+    num_grad_steps = 100001
 
     hook_fns = create_hook_fns_train(
         start_grad_step=start_grad_step,
@@ -90,6 +90,7 @@ def train_model(model,
                 dts_by_trial=run_envs_output['dts_by_trial'],
                 action_taken_by_total_trials=run_envs_output['action_taken_by_total_trials'],
                 correct_action_taken_by_action_taken=run_envs_output['correct_action_taken_by_action_taken'],
+                correct_action_taken_by_total_trials=run_envs_output['correct_action_taken_by_total_trials'],
                 session_data=run_envs_output['session_data'],
                 hidden_states=hidden_states,
                 grad_step=grad_step,

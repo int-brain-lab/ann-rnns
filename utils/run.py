@@ -9,6 +9,55 @@ import torch
 from utils.models import RecurrentModel
 
 
+def convert_session_data_to_ibl_changepoint_csv(session_data,
+                                                env_block_side_probs,
+                                                log_dir):
+
+    trial_end_data = session_data[session_data.trial_end == 1.]
+    logging.info(f'Total number of trials: {len(trial_end_data)}')
+
+    trial_num = trial_end_data.trial_within_session.values.astype(np.int) + 1
+    session_num = trial_end_data.session_index.values + 1
+
+    # probabilities for block
+    block_side_probs = np.array(env_block_side_probs)[:, 0]
+    stim_probability_left = block_side_probs[((trial_end_data.block_side.values + 1)/2).astype(np.int)]
+
+    # should be either 0, 0.0625, 0.125, 0.25, 1
+    contrast = trial_end_data.trial_strength.values
+    contrast_map = {
+        0:      0,
+        0.5:    0.0625,
+        0.75:   0.125,
+        1.0:    0.25,
+        1.5:    1.}
+    for old_contrast, new_contrast in contrast_map.items():
+        contrast[contrast == old_contrast] = new_contrast
+
+    # 35 is legacy number
+    position = 35 * trial_end_data.trial_side.values
+    response_choice = trial_end_data.action_side.values
+    trial_correct = trial_end_data.correct_action_taken.values
+    reaction_time = trial_end_data.rnn_step_index.values
+
+    # assert all correct actions have position sign matching response choice sign
+    assert np.all((np.sign(position) == np.sign(response_choice))[trial_correct.astype(np.bool)])
+
+    ibl_changepoint_df = dict(
+        trial_num=trial_num,
+        session_num=session_num,
+        stim_probability_left=stim_probability_left,
+        contrast=contrast,
+        position=position,
+        response_choice=response_choice,
+        trial_correct=trial_correct,
+        reaction_time=reaction_time)
+    ibl_changepoint_df = pd.DataFrame(ibl_changepoint_df)
+    ibl_changepoint_df.to_csv(
+        os.path.join(log_dir, 'MIT_001.csv'),
+        index=False)
+
+
 def create_logger(log_dir):
     logging.basicConfig(
         filename=os.path.join(log_dir, 'logging.txt'),
@@ -147,8 +196,9 @@ def load_checkpoint(train_log_dir,
 
     # replace some defaults
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
-    env_kwargs['blocks_per_session'] = 800
-    # env_kwargs['blocks_per_session'] = 70
+    # env_kwargs['blocks_per_session'] = 800
+    # env_kwargs['blocks_per_session'] = 200
+    env_kwargs['blocks_per_session'] = 80
 
     return model, optimizer, global_step, env_kwargs
 
@@ -187,12 +237,14 @@ def run_envs(model,
         session_data.trial_end == 1.].action_taken.mean()
     correct_action_taken_by_action_taken = session_data[
         session_data.action_taken == 1.].correct_action_taken.mean()
+    correct_action_taken_by_total_trials = session_data[
+        session_data.trial_end == 1.].correct_action_taken.mean()
     feedback_by_dt = session_data.reward.mean()
     dts_by_trial = session_data.groupby([
         'session_index', 'block_index', 'trial_index']).size().mean()
 
-    logging.info('Fraction of Correct Actions Taken by Total Actions Taken: ' +
-                 str(correct_action_taken_by_action_taken))
+    logging.info(f'Fraction of Correct Actions Taken by Total Actions Taken: '
+                 f'{correct_action_taken_by_action_taken}')
 
     run_envs_output = dict(
         session_data=session_data,
@@ -200,7 +252,8 @@ def run_envs(model,
         avg_loss_per_dt=avg_loss_per_dt,
         dts_by_trial=dts_by_trial,
         action_taken_by_total_trials=action_taken_by_total_trials,
-        correct_action_taken_by_action_taken=correct_action_taken_by_action_taken
+        correct_action_taken_by_action_taken=correct_action_taken_by_action_taken,
+        correct_action_taken_by_total_trials=correct_action_taken_by_total_trials
     )
 
     return run_envs_output

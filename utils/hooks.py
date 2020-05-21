@@ -52,6 +52,7 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_behav_dts_per_trial_by_stimuli_strength),
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_dts_within_trial),
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_trial_within_block),
+        (0, utils.plot.hook_plot_behav_prob_correct_action_by_zero_contrast_trial_within_block),
         (0, utils.plot.hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_trial_strength),
         (0, utils.plot.hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration),
         (0, utils.plot.hook_plot_behav_right_action_by_signed_contrast),
@@ -105,7 +106,7 @@ def create_hook_fns_train(start_grad_step,
         # (plot_freq, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),
         # (plot_freq, utils.plot.hook_plot_task_stimuli_and_model_prob_in_first_n_trials),
         # (plot_freq, utils.plot.hook_plot_behav_dts_per_trial_by_stimuli_strength),
-        # (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_by_dts_within_trial),
+        (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_by_dts_within_trial),
         # (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_by_trial_within_block),
         # (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_trial_strength),
         # (plot_freq, utils.plot.hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration),
@@ -232,6 +233,11 @@ def hook_write_scalars(hook_input):
     hook_input['tensorboard_writer'].add_scalar(
         tag=hook_input['tag_prefix'] + 'correct_action_taken_by_action_taken',
         scalar_value=hook_input['correct_action_taken_by_action_taken'],
+        global_step=hook_input['grad_step'])
+
+    hook_input['tensorboard_writer'].add_scalar(
+        tag=hook_input['tag_prefix'] + 'correct_action_taken_by_total_trials',
+        scalar_value=hook_input['correct_action_taken_by_total_trials'],
         global_step=hook_input['grad_step'])
 
     hook_input['tensorboard_writer'].add_scalar(

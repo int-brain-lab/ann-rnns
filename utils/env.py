@@ -20,7 +20,7 @@ class IBLSession(gym.Env):
                  min_trials_per_block=20,
                  max_trials_per_block=100,
                  max_stimuli_per_trial=10,
-                 time_delay_penalty=0.05,
+                 time_delay_penalty=-0.05,
                  rnn_steps_before_stimulus=2):
 
         """
@@ -142,19 +142,19 @@ class IBLSession(gym.Env):
 
         # target has shape (batch=1,). Reshape to (1, 1) to match action with shape
         # (batch = 1, 1) for loss function
-        blank_rnn_step = left_stimulus == 0 and right_stimulus == 0
+        is_blank_rnn_step = left_stimulus == 0 and right_stimulus == 0
         loss = self.loss_fn(
             target=correct_action_index.reshape((1,)).long(),
             action_probs=model_prob_output,
-            blank_rnn_step=blank_rnn_step)
-        self.losses[self.current_rnn_step_within_session] = loss
+            is_blank_rnn_step=is_blank_rnn_step)
+        self.losses[self.current_rnn_step_within_session] = loss  # * self.current_rnn_step_within_trial
 
-        timeout = (self.current_rnn_step_within_trial + 1) == self.max_rnn_steps_per_trial
+        is_timeout = (self.current_rnn_step_within_trial + 1) == self.max_rnn_steps_per_trial
         reward = self.reward_fn(
             target=correct_action_index,
             input=model_prob_output,
-            timeout=timeout,
-            blank_rnn_step=blank_rnn_step)
+            is_timeout=is_timeout,
+            is_blank_rnn_step=is_blank_rnn_step)
 
         timestep_data = dict(
             trial_within_session=self.current_trial_within_session,
@@ -195,7 +195,7 @@ class IBLSession(gym.Env):
                 self.session_data.at[self.current_rnn_step_within_session - 1,
                                      'correct_action_taken'] = reward == 1
                 self.session_data.at[self.current_rnn_step_within_session - 1,
-                                     'action_side'] = correct_action.item()
+                                     'action_side'] = -1. if left_action_prob > 0.9 else 1.
             else:
                 self.session_data.at[self.current_rnn_step_within_session - 1,
                                      'action_taken'] = 0.
@@ -256,8 +256,8 @@ class IBLSession(gym.Env):
 
         nlloss = NLLLoss()
 
-        def loss_fn(target, action_probs, blank_rnn_step):
-            if blank_rnn_step:
+        def loss_fn(target, action_probs, is_blank_rnn_step):
+            if is_blank_rnn_step:
                 loss = torch.zeros(1, dtype=torch.double, requires_grad=True)[0]
             else:
                 # TODO: adding time delay penalty is currently pointless
@@ -274,22 +274,23 @@ class IBLSession(gym.Env):
                     input.shape should be (batch size = 1, num actions = 2,)
         """
 
-        def reward_fn(target, input, timeout, blank_rnn_step):
+        def reward_fn(target, input, is_timeout, is_blank_rnn_step):
 
             max_prob, max_prob_idx = torch.max(input, dim=1)
 
-            if blank_rnn_step:
+            if is_blank_rnn_step:
                 reward = torch.zeros(1).double()
             elif max_prob > 0.9:
                 # for an action to be rewarded, the model must have made the correct choice
                 # also, punish model if action was incorrect
                 reward = 2. * (target == max_prob_idx).double() - 1.
-            elif timeout:
+            elif is_timeout:
                 # punish model for timing out
                 reward = torch.zeros(1).fill_(-1).double()
             else:
                 # give 0
-                reward = torch.zeros(1).double()
+                # reward = torch.zeros(1).double()
+                reward = torch.zeros(1).fill_(self.time_delay_penalty).double()
 
             return reward
 
@@ -418,7 +419,7 @@ def create_biased_choice_worlds(num_sessions=11,
     """
 
     num_means = 5
-    possible_trial_strengths = tuple(np.linspace(0., 1., num_means))
+    possible_trial_strengths = tuple(np.linspace(0., 2.4, num_means))
     possible_trial_strengths_probs = (1 / num_means,) * num_means
     block_side_p = 0.8
 

@@ -8,12 +8,14 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.analysis import add_analysis_data_to_hook_input
 from utils.env import create_biased_choice_worlds
 from utils.hooks import create_hook_fns_analyze
-from utils.run import create_logger, load_checkpoint, run_envs, set_seed, stitch_plots
+from utils.run import convert_session_data_to_ibl_changepoint_csv, create_logger, \
+    load_checkpoint, run_envs, set_seed, stitch_plots
 
 
 def main():
 
-    run_dir = 'rnn, block_side_probs=0.80, snr=0.9'
+    # run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-05-19 22:28:55.575480'  # SNR out to 1.5
+    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-05-20 11:50:35.403504'  # SNR out to 2.5
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
@@ -42,6 +44,11 @@ def main():
         start_grad_step=grad_step,
         num_grad_steps=0,
         tag_prefix='analyze/')
+
+    convert_session_data_to_ibl_changepoint_csv(
+        session_data=analyze_model_output['run_envs_output']['session_data'],
+        env_block_side_probs=envs[0].block_side_probs,
+        log_dir=analyze_log_dir)
 
     tensorboard_writer.close()
 
@@ -83,6 +90,7 @@ def analyze_model(model,
         dts_by_trial=run_envs_output['dts_by_trial'],
         action_taken_by_total_trials=run_envs_output['action_taken_by_total_trials'],
         correct_action_taken_by_action_taken=run_envs_output['correct_action_taken_by_action_taken'],
+        correct_action_taken_by_total_trials=run_envs_output['correct_action_taken_by_total_trials'],
         session_data=run_envs_output['session_data'],
         hidden_states=hidden_states,
         grad_step=start_grad_step,
@@ -107,6 +115,17 @@ def analyze_model(model,
 
     # stitch figures together into single PDF for easy use
     stitch_plots(log_dir=tensorboard_writer.log_dir)
+
+    # recurrent_jacobian = hook_input['fixed_point_df']['jacobian_hidden'][0]
+    # import scipy.linalg
+    # eigresult = scipy.linalg.eig(recurrent_jacobian, left=True, right=True)
+    #
+    # recurrent_matrix = hook_input['model'].core.weight_hh_l0.data.numpy()
+    # recurrent_eigresult = scipy.linalg.eig(recurrent_matrix, left=True, right=True)
+    # np.sort(np.real(eigresult[0]))[::-1]
+    # input_matrix = hook_input['model'].core.weight_ih_l0.data.numpy()
+    # input_eigresult = scipy.linalg.eig(recurrent_matrix, left=True, right=True)
+    # np.sort(np.real(input_eigresult[0]))[::-1]
 
     return analyze_model_output
 

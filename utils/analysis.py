@@ -1,5 +1,4 @@
 import community
-from itertools import product
 import logging
 import networkx as nx
 import networkx.algorithms.community
@@ -32,12 +31,12 @@ possible_stimuli = torch.DoubleTensor(
      [0., 0.]])
 
 possible_feedback = torch.DoubleTensor(
-    [[0],
-     [0],
-     [0],
+    [[-0.05],
+     [-0.05],
+     [-0.05],
      [-1],
-     [1],
-     [0]])
+     [0],
+     [1]])
 
 
 def add_analysis_data_to_hook_input(hook_input):
@@ -87,6 +86,7 @@ def add_analysis_data_to_hook_input(hook_input):
         pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
 
     optimal_observers_results = compute_optimal_observers(
+        env=hook_input['envs'][0],
         session_data=hook_input['session_data'],
         rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_stimulus,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty)
@@ -247,7 +247,7 @@ def compute_model_fixed_points_basins_of_attraction(fixed_point_df):
         fixed_points_basins_df[column] = fixed_points_basins_df[column].astype(np.object)
 
     for i, ((lstim, rstim, fdbk), fixed_point_subset_df) in enumerate(fixed_point_df.groupby([
-        'left_stimulus', 'right_stimulus', 'feedback'])):
+        'left_stimulus', 'right_stimulus', 'feedback'], sort=False)):
 
         fixed_points_basins_df.at[i, 'left_stimulus'] = lstim
         fixed_points_basins_df.at[i, 'right_stimulus'] = rstim
@@ -685,8 +685,9 @@ def compute_model_hidden_states_jl(hidden_states,
         [1., 0]) > 0
     if not right_trial_vector_points_right:
         logging.info('Swapped JL right readout vector direction')
-        jlm.components_[0] *= -1.
-        jl_trial_readout_vector *= -1
+        jlm.components_[0, :] *= -1.
+        jl_trial_readout_vector = jlm.transform(trial_readout_vector)[0]
+        jl_trial_readout_vector /= np.linalg.norm(jl_trial_readout_vector)
     else:
         logging.info('Did not swap JL right readout vector direction')
 
@@ -781,7 +782,6 @@ def compute_model_hidden_state_jacobians(model,
 
 def compute_model_hidden_states_pca(hidden_states,
                                     model_readout_weights):
-
     # ensure hidden states have 2 dimensions
     assert len(hidden_states.shape) == 2
     pca = PCA(n_components=2)
@@ -798,8 +798,9 @@ def compute_model_hidden_states_pca(hidden_states,
         [1., 0]) > 0
     if not right_trial_vector_points_right:
         logging.info('Swapped PCA right readout vector direction')
-        pca.components_[0] *= -1.
-        pca_trial_readout_vector *= -1
+        pca.components_[0, :] *= -1.
+        pca_trial_readout_vector = pca.transform(trial_readout_vector)[0]
+        pca_trial_readout_vector /= np.linalg.norm(pca_trial_readout_vector)
     else:
         logging.info('Did not swap PCA right readout vector direction')
 
@@ -824,7 +825,6 @@ def compute_model_block_readout_vectors(session_data,
                                         pca,
                                         trial_readout_vector,
                                         pca_trial_readout_vector):
-
     block_sides = session_data.block_side.values
 
     # select RIGHT block side readout vector
@@ -891,34 +891,26 @@ def compute_model_state_space_vector_fields(session_data,
                                   (session_data.right_stimulus == 0) & \
                                   (session_data.rnn_step_index == 1.)
         elif feedback_val.item() != 0. and torch.all(stimulus_val == 0):  # feedback dt
-            task_condition_rows = (session_data.reward == feedback_val.item())
+            task_condition_rows = (session_data.reward.shift(1) == feedback_val.item())
             # make sure last value is False to prevent indexing issues on last dt
             task_condition_rows[len(task_condition_rows) - 1] = False
-        elif stimulus_val[0] == stimulus_val[1]:  # equal stimulus
-            task_condition_rows = (session_data.reward == 0.) & \
-                                  (session_data.left_stimulus != 0) & \
-                                  (session_data.right_stimulus != 0) & \
-                                  (np.abs(session_data.left_stimulus - session_data.right_stimulus) < 0.1)
-            # task_condition_rows = (session_data.reward == 0.) & \
-            #                       (session_data.left_stimulus != 0) & \
-            #                       (session_data.right_stimulus != 0) & \
-            #                       (np.abs(session_data.left_stimulus - session_data.right_stimulus) < 0.1)
-        else:  # strong left, or strong right
-            task_condition_rows = (stimulus_val[0].item() - 0.15 <= session_data.left_stimulus) & \
+        else:  # equal stimulus, strong left, or strong right
+            task_condition_rows = (session_data.reward.shift(1) == feedback_val.item()) &\
+                                  (stimulus_val[0].item() - 0.15 <= session_data.left_stimulus) & \
                                   (session_data.left_stimulus <= stimulus_val[0].item() + 0.15) & \
                                   (stimulus_val[1].item() - 0.15 <= session_data.right_stimulus) & \
                                   (session_data.right_stimulus <= stimulus_val[1].item() + 0.15)
 
         task_condition_index = task_condition_rows.index[task_condition_rows]
-        if len(task_condition_index) > 2500:
+        # if too many, downsample
+        if len(task_condition_index) > 1000:
             task_condition_index = np.random.choice(
                 task_condition_index,
-                size=2500,
+                size=1000,
                 replace=False)
 
-        feedback_delay = 0 if feedback_val.item() == 0 else 1
-        pca_hidden_states_pre = pca_hidden_states[task_condition_index + feedback_delay - 1]
-        pca_hidden_states_post = pca_hidden_states[task_condition_index + feedback_delay]
+        pca_hidden_states_pre = pca_hidden_states[task_condition_index - 1]
+        pca_hidden_states_post = pca_hidden_states[task_condition_index]
         displacement_pca = pca_hidden_states_post - pca_hidden_states_pre
         displacement_pca_norm = np.linalg.norm(displacement_pca, axis=1)
 
@@ -980,9 +972,12 @@ def compute_model_weights_community_detection(model):
         arrows=True)
 
 
-def compute_optimal_observers(session_data,
+def compute_optimal_observers(env,
+                              session_data,
                               time_delay_penalty,
                               rnn_steps_before_stimulus):
+
+    compute_optimal_observer_block_binary_unknown(session_data=session_data)
 
     # import numpyro
     # import numpyro.distributions
@@ -1054,12 +1049,32 @@ def compute_optimal_observers(session_data,
     return optimal_observers_results
 
 
+def compute_optimal_observer_block_binary_known(session_data):
+    pass
+
+
+def compute_optimal_observer_block_binary_unknown(session_data):
+    pass
+#     import pymc3 as pm
+#
+#     with pm.Model() as model:
+#         block_transition = pm.Dirichlet('block_transition', a=np.ones(2), shape=(2, 2))
+#
+#         blocks = StateTransitions('blocks', block_transition, init_probs, shape=len(vals_simple))
+#
+#         y = PoissionProcess('Output', states, lambdas, observed=vals_simple)
+
+
+def compute_optimal_observer_block_continuous(session_data):
+    pass
+
+
 def compute_optimal_prob_correct_blockless(session_data,
                                            rnn_steps_before_stimulus):
     # keep only last dts in trials
     trial_end_data = session_data[session_data.trial_end == 1.]
     possible_num_obs_within_trial = np.sort(trial_end_data['rnn_step_index'].unique())
-    possible_num_obs_within_trial -= rnn_steps_before_stimulus
+    possible_num_obs_within_trial -= rnn_steps_before_stimulus - 1  # 0th RNN step is 1st observation
 
     optimal_prob_correct_after_num_obs_blockless_by_trial_strength = pd.DataFrame(
         np.nan,  # initialize all to nan
@@ -1071,7 +1086,8 @@ def compute_optimal_prob_correct_blockless(session_data,
             1 - norm.cdf(-mu * np.sqrt(num_obs_within_trial)) if num_obs_within_trial > 0 else 0.5
             for num_obs_within_trial in possible_num_obs_within_trial])
         fraction_of_trials = number_of_trials / len(trial_end_data)
-        optimal_prob_correct_after_num_obs_blockless_by_trial_strength[mu] = ideal_prob_correct_after_dt_per_trial_given_mu
+        optimal_prob_correct_after_num_obs_blockless_by_trial_strength[
+            mu] = ideal_prob_correct_after_dt_per_trial_given_mu
 
     # reorder columns
     optimal_prob_correct_after_num_obs_blockless_by_trial_strength = \
@@ -1079,16 +1095,16 @@ def compute_optimal_prob_correct_blockless(session_data,
             sorted(optimal_prob_correct_after_num_obs_blockless_by_trial_strength.columns), axis=1)
 
     # average over possible trial strengths
-    optimal_prob_correct_after_num_obs_blockless = optimal_prob_correct_after_num_obs_blockless_by_trial_strength.mean(axis=1)
+    optimal_prob_correct_after_num_obs_blockless = optimal_prob_correct_after_num_obs_blockless_by_trial_strength.mean(
+        axis=1)
 
-    return optimal_prob_correct_after_num_obs_blockless,\
+    return optimal_prob_correct_after_num_obs_blockless, \
            optimal_prob_correct_after_num_obs_blockless_by_trial_strength
 
 
 def compute_optimal_reward_rate_blockless(optimal_prob_correct_after_num_obs_blockless,
                                           optimal_prob_correct_after_num_obs_blockless_by_trial_strength,
                                           time_delay_penalty):
-
     penalty_after_num_obs = optimal_prob_correct_after_num_obs_blockless.index.values * time_delay_penalty
 
     optimal_reward_rate_after_num_obs_blockless = 2 * optimal_prob_correct_after_num_obs_blockless - 1
@@ -1196,7 +1212,7 @@ def fit_reduced_dim_dynamics(session_data,
     lr.fit(X=X_train, y=y_train)
     A_prime, B_prime = lr.coef_[:, :2], lr.coef_[:, 2:]
     r_squared = lr.score(X_test, y_test)
-    logging.info(f'R^2: {r_squared}',)
+    logging.info(f'R^2: {r_squared}', )
     logging.info(f'A prime:\n{A_prime}', )
     logging.info(f'B prime:\n{B_prime}')
 
