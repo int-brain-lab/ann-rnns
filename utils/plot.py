@@ -148,7 +148,8 @@ def hook_plot_behav_dts_per_trial_by_stimuli_strength(hook_input):
         'session_index', 'block_index', 'trial_index']).agg({
         'trial_strength': 'first',
         'rnn_step_index': 'size',
-        'correct_action_taken': 'last'})
+        'correct_action_taken': 'last',
+        'concordant_trial': 'first'})
 
     # plot trial number within block (x) vs probability of correct response (y)
     fig, ax = plt.subplots(figsize=(4, 3))
@@ -171,8 +172,9 @@ def hook_plot_behav_dts_per_trial_by_stimuli_strength(hook_input):
     #     color=side_color_map['ideal'],
     #     marker='d')
 
-    for correct_action_taken, dts_and_stimuli_strength_subset in \
-            dts_and_stimuli_strength_by_trial_df.groupby(['correct_action_taken']):
+    for (correct_action_taken, concordant_trial), dts_and_stimuli_strength_subset in \
+            dts_and_stimuli_strength_by_trial_df.groupby([
+                'correct_action_taken', 'concordant_trial']):
 
         if correct_action_taken == 1.:
             label = 'Correct'
@@ -180,6 +182,13 @@ def hook_plot_behav_dts_per_trial_by_stimuli_strength(hook_input):
         else:
             label = 'Incorrect'
             color = side_color_map['incorrect']
+
+        if concordant_trial:
+            label += ', Concordant Trials'
+            style = '-o'
+        else:
+            label += ', Discordant Trials'
+            style = '--o'
 
         avg_dts_per_trial = dts_and_stimuli_strength_subset.groupby(
             ['trial_strength']).rnn_step_index.mean()
@@ -190,6 +199,7 @@ def hook_plot_behav_dts_per_trial_by_stimuli_strength(hook_input):
         ax.plot(
             stimuli_strengths,
             avg_dts_per_trial,
+            style,
             color=color,
             label=label)
         ax.fill_between(
@@ -1196,7 +1206,7 @@ def hook_plot_state_space_effect_of_feedback(hook_input):
         gridspec_kw={"width_ratios": [1, 1, 0.05]})
 
     for i, ((feedback, concordant_or_not), session_data_by_trial_side_and_feedback) in \
-            enumerate(session_data.groupby(['reward', 'concordant_sides'])):
+            enumerate(session_data.groupby(['reward', 'concordant_trial'])):
 
         row, col = int(i / 2), int(i % 2)
         ax = axes[row, col]
@@ -1462,7 +1472,8 @@ def hook_plot_state_space_projection_on_right_trial_vector_by_dts_within_trial(h
     ax.set_xlabel('dt within Trial')
     ax.set_ylabel('Projection Along Right Trial Vector')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
-    for trial_side, trial_side_during_trials_data in during_trials_data.groupby(['trial_side']):
+    for (trial_side, correct_trial), trial_side_during_trials_data in\
+            during_trials_data.groupby(['trial_side', 'correct_trial_dt']):
 
         task_aligned_hidden_states = hook_input['task_aligned_hidden_states'][
             trial_side_during_trials_data.index]
@@ -1477,11 +1488,18 @@ def hook_plot_state_space_projection_on_right_trial_vector_by_dts_within_trial(h
         mean_magn_along_block_vector_by_rnn_step_index = temp_df.groupby(['rnn_step_index'])['magn_along_trial_vector'].mean()
         sem_magn_along_block_vector_by_rnn_step_index = temp_df.groupby(['rnn_step_index'])['magn_along_trial_vector'].sem()
 
+        label = f'{side_string_map[trial_side]} Trials, '
+        if correct_trial == 1.:
+            style = '-o'
+            label += 'Correct'
+        else:
+            style = '--o'
+            label += 'Incorrect'
         ax.plot(
             mean_magn_along_block_vector_by_rnn_step_index.index,
             mean_magn_along_block_vector_by_rnn_step_index,
-            '-o',
-            label=side_string_map[trial_side] + ' Trial',
+            style,
+            label=label,
             color=side_color_map[trial_side])
 
         ax.fill_between(
@@ -1755,8 +1773,8 @@ def hook_plot_state_space_trials_by_classifier_and_trial_index(hook_input):
     trial_end_data = session_data[session_data.trial_end == 1]
 
     fig, axes = plt.subplots(nrows=1,
-                             ncols=1,
-                             gridspec_kw={"width_ratios": [1]},
+                             ncols=2,
+                             gridspec_kw={"width_ratios": [1, 0.05]},
                              figsize=(5, 5))
 
     max_trials_per_block_to_consider = 50
@@ -1774,7 +1792,7 @@ def hook_plot_state_space_trials_by_classifier_and_trial_index(hook_input):
 
     for row, (color_array, title) in enumerate(zip(color_arrays, titles)):
 
-        ax = axes
+        ax = axes[row]
         ax.axis('equal')  # set yscale to match xscale
         ax.set_title(f'{title}')
         ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
@@ -1784,7 +1802,7 @@ def hook_plot_state_space_trials_by_classifier_and_trial_index(hook_input):
 
         block_side_trial_end_rows = trial_end_data.index.values
         block_side_trial_end_proj_hidden_states = hook_input['pca_hidden_states'][block_side_trial_end_rows]
-        ax.scatter(
+        sc = ax.scatter(
             block_side_trial_end_proj_hidden_states[:, 0],
             block_side_trial_end_proj_hidden_states[:, 1],
             alpha=0.4,
@@ -1793,6 +1811,7 @@ def hook_plot_state_space_trials_by_classifier_and_trial_index(hook_input):
 
         add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input)
 
+    fig.colorbar(sc, cax=axes[1])
     hook_input['tensorboard_writer'].add_figure(
         tag='state_space_trials_by_block_side',
         figure=fig,

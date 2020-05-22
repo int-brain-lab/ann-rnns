@@ -1,9 +1,0 @@
-python/define_paths.py
-dj_local_conf.json
-citricacid/figures
-
-*/__pycache__/
-
-.idea
-.DS_Store
-.vscode

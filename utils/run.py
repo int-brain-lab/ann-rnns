@@ -144,8 +144,15 @@ def extract_session_data(envs):
     session_data['signed_trial_strength'] = session_data['trial_strength'] * \
                                             session_data['trial_side']
 
-    session_data['concordant_sides'] = session_data['trial_side'] == \
+    session_data['concordant_trial'] = session_data['trial_side'] == \
                                        session_data['block_side']
+
+    # record whether dt was in correct trial
+    session_data['correct_trial_dt'] = np.nan
+    for _, trial in session_data.groupby(['session_index', 'block_index', 'trial_index']):
+        action_correct = trial.correct_action_taken.values[-1]
+        trial_indices = trial.index
+        session_data.loc[trial_indices, 'correct_trial_dt'] = action_correct
 
     # make trial side, block side orthogonal
     block_sides = session_data.block_side.values
@@ -196,9 +203,9 @@ def load_checkpoint(train_log_dir,
 
     # replace some defaults
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
-    # env_kwargs['blocks_per_session'] = 800
+    env_kwargs['blocks_per_session'] = 800
     # env_kwargs['blocks_per_session'] = 200
-    env_kwargs['blocks_per_session'] = 80
+    # env_kwargs['blocks_per_session'] = 80
 
     return model, optimizer, global_step, env_kwargs
 

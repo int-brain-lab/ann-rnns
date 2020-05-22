@@ -1,9 +1,9 @@
-[submodule "analysis"]
-	path = submodules/int-brain-lab/analysis
-	url = git@github.com:int-brain-lab/analysis.git
 [submodule "bads"]
 	path = submodules/bads
 	url = https://github.com/lacerbi/bads
 [submodule "vbmc"]
 	path = submodules/vbmc
 	url = https://github.com/lacerbi/vbmc
+[submodule "submodules/iblanalysis"]
+	path = submodules/iblanalysis
+	url = git@github.com:int-brain-lab/analysis.git

@@ -4,6 +4,7 @@ import networkx as nx
 import networkx.algorithms.community
 import networkx.drawing
 import numpy as np
+import os
 import pandas as pd
 from psytrack.helper.invBlkTriDiag import getCredibleInterval
 from psytrack.hyperOpt import hyperOpt
@@ -15,12 +16,14 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.random_projection import GaussianRandomProjection
 import statsmodels.api as sm
+import sys
 import torch
 import torch.autograd
 import torch.optim
 
 from utils.env import create_custom_worlds
 from utils.run import run_envs
+
 
 possible_stimuli = torch.DoubleTensor(
     [[1.2, 0.2],
@@ -42,6 +45,10 @@ possible_feedback = torch.DoubleTensor(
 def add_analysis_data_to_hook_input(hook_input):
     # convert from shape (number of total time steps, num hidden layers, hidden size) to
     # shape (number of total time steps, num hidden layers * hidden size)
+
+    compute_behav_psychometric_comparison_between_model_and_mice(
+        session_data=hook_input['session_data'])
+
     reshaped_hidden_states = hook_input['hidden_states'].reshape(
         hook_input['hidden_states'].shape[0], -1)
 
@@ -140,6 +147,43 @@ def compute_eigenvalues(matrix):
 #     )
 #
 #     return trajectory_controlled_output
+
+
+def compute_behav_psychometric_comparison_between_model_and_mice(session_data):
+
+    # only take consider last dt within a trial
+    action_data = session_data.loc[
+        session_data['action_taken'] == 1,
+        ['block_side', 'signed_trial_strength', 'action_side']]
+
+    # rescale from [-1, -1] to [0, 1]
+    action_data['action_side'] = (1 + action_data['action_side']) / 2
+
+    # normalize signed trial strengths to [-1, 1]
+    action_data['signed_trial_strength'] /= action_data['signed_trial_strength'].max()
+
+    # reset_index to add index (i.e. signed_trial_strength) as a column
+    rnn_right_block_psychometric_data = action_data[action_data.block_side == 1.].groupby(
+        ['signed_trial_strength']).agg(
+        {'action_side': ['size', 'mean']})['action_side'].reset_index().to_numpy()
+
+    mice_right_block_psychometric_data = np.array([
+        [],
+        [],
+        []
+    ])
+
+    from submodules.iblanalysis.python.psychofit import mle_fit_psycho
+
+    # threshold, slope, gamma1, gamma2
+    # my guesses:
+    # threshold (bias) is the contrast strength (x) at y=0.5
+    # slope is the slope from y=0.25 to y=0.75
+    # gamma is the lapse rate i.e. 1 - the upper right shoulder y value (or equivalently,
+    #       the lower left shoulder y value - 0)
+    rnn_params, rnn_mle = mle_fit_psycho(rnn_right_block_psychometric_data.T, 'erf_psycho')
+
+    print(10)
 
 
 def compute_model_fixed_points(model,
@@ -833,8 +877,8 @@ def compute_model_block_readout_vectors(session_data,
         exog=pca_hidden_states)
     logistic_regression_result = logistic_regression.fit()
     session_data['classifier_block_side'] = 2. * logistic_regression_result.predict(pca_hidden_states) - 1.
-    session_data['classifier_block_side'] /= np.max(np.abs(session_data['classifier_block_side']))
 
+    # TODO: compute accuracy of classifier
     pca_block_readout_vector = logistic_regression_result.params
     pca_block_readout_vector /= np.linalg.norm(pca_block_readout_vector)
     block_readout_vector = np.expand_dims(pca.inverse_transform(pca_block_readout_vector), [0])
