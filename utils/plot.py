@@ -1189,6 +1189,32 @@ def hook_plot_model_weights_community_detection(hook_input):
 #         global_step=hook_input['grad_step'],
 #         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
+def hook_plot_optimal_observer_block_posterior(hook_input):
+
+    n = 300
+    x = np.arange(1, n+1)
+    fig, ax = plt.subplots()
+    ax.set_xlabel('Trial Number')
+    ax.set_ylabel(r'$P(b_n=R|t_{\leq n})$')
+    session_data = hook_input['session_data']
+    trial_end_data = session_data[session_data.trial_end == 1.]
+    ax.plot(
+        x,
+        hook_input['optimal_block_posterior'][:n, 1],
+        color='tab:blue',
+        label='Bayesian Observer')
+    ax.plot(
+        x,
+        (1 + trial_end_data['block_side'][:n]) / 2 ,
+        color='tab:orange',
+        label='Block Side')
+    ax.legend()
+    hook_input['tensorboard_writer'].add_figure(
+        tag='optimal_observer_block_binary_known',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
 
 def hook_plot_state_space_effect_of_feedback(hook_input):
     session_data = hook_input['session_data']
@@ -1414,39 +1440,55 @@ def hook_plot_state_space_fixed_point_search(hook_input):
 def hook_plot_state_space_projection_on_right_block_vector_by_trial_within_block(hook_input):
     session_data = hook_input['session_data']
 
-    during_trials_data = session_data[(session_data.left_stimulus != 0) &
-                                      (session_data.right_stimulus != 0)]
+    during_trials_data = session_data[session_data['trial_end'] == 1.].copy()
+    during_trials_data['optimal_block_posterior'] = 2. * hook_input['optimal_block_posterior'][:, 1] - 1.
+
+    task_aligned_hidden_states = hook_input['task_aligned_hidden_states']
+
+    magn_along_block_vector = np.dot(
+        task_aligned_hidden_states,
+        hook_input['pca_block_readout_vector'].flatten())
+    magn_along_block_vector /= np.median(np.abs(magn_along_block_vector))
 
     fig, ax = plt.subplots(figsize=(4, 3))
-    fig.suptitle('Projection Along Right Block Vector by Trial within Block')
+    fig.suptitle('Normalized Projection Along Right Block Vector by Trial within Block')
     ax.set_xlabel('Trial within Block')
-    ax.set_ylabel('Projection Along Right Block Vector')
+    ax.set_ylabel('Normalized Projection Along Right Block Vector')
     fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     for block_side, block_side_trials_data in during_trials_data.groupby(['block_side']):
 
-        task_aligned_hidden_states = hook_input['task_aligned_hidden_states'][
-            block_side_trials_data.index]
+        temp_df = block_side_trials_data[[
+            'block_side', 'trial_index',
+            'optimal_block_posterior']].copy()
+        temp_df['magn_along_block_vector'] = magn_along_block_vector[block_side_trials_data.index]
 
-        magn_along_block_vector = np.dot(
-            task_aligned_hidden_states,
-            hook_input['pca_block_readout_vector'].flatten())
-
-        temp_df = block_side_trials_data[['block_side', 'trial_index']].copy()
-        temp_df['magn_along_block_vector'] = magn_along_block_vector
-
-        mean_magn_along_block_vector_by_trial_index = temp_df.groupby(['trial_index'])['magn_along_block_vector'].mean()
-        sem_magn_along_block_vector_by_trial_index = temp_df.groupby(['trial_index'])['magn_along_block_vector'].sem()
+        temp_groupby = temp_df.groupby(['trial_index']).agg({
+            'magn_along_block_vector': ['mean', 'sem'],
+            'optimal_block_posterior': ['mean'],  # first is arbitrary
+        })  # first is arbitrary
+        mean_magn_along_block_vector_by_trial_index = temp_groupby['magn_along_block_vector']['mean']
+        sem_magn_along_block_vector_by_trial_index = temp_groupby['magn_along_block_vector']['sem']
+        optimal_block_posterior_by_trial_index = temp_groupby['optimal_block_posterior']['mean']
 
         ax.plot(
-            mean_magn_along_block_vector_by_trial_index.index,
+            temp_groupby.index,
+            optimal_block_posterior_by_trial_index,
+            '-d',
+            markersize=2,
+            label=f'Optimal {side_string_map[block_side]} Block',
+            color=side_color_map['ideal']
+        )
+
+        ax.plot(
+            temp_groupby.index,
             mean_magn_along_block_vector_by_trial_index,
-            '-o',
-            markersize=3,
-            label=side_string_map[block_side] + ' Block',
+            markersize=1,
+            linewidth=1,
+            label=f'{side_string_map[block_side]} Block',
             color=side_color_map[block_side])
 
         ax.fill_between(
-            x=mean_magn_along_block_vector_by_trial_index.index,
+            x=temp_groupby.index,
             y1=mean_magn_along_block_vector_by_trial_index - sem_magn_along_block_vector_by_trial_index,
             y2=mean_magn_along_block_vector_by_trial_index + sem_magn_along_block_vector_by_trial_index,
             alpha=0.3,

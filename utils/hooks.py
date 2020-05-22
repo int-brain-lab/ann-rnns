@@ -63,6 +63,7 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_model_hidden_unit_fraction_var_explained),
         (0, utils.plot.hook_plot_model_weights_and_gradients),
         # (plot_freq, utils.plot.hook_plot_model_weights_community_detection),
+        (0, utils.plot.hook_plot_optimal_observer_block_posterior),
         # (0, utils.plot.hook_plot_state_space_fixed_points),
         (0, utils.plot.hook_plot_state_space_effect_of_feedback),
         (0, utils.plot.hook_plot_state_space_fixed_point_basins_of_attraction),

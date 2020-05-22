@@ -183,8 +183,6 @@ def compute_behav_psychometric_comparison_between_model_and_mice(session_data):
     #       the lower left shoulder y value - 0)
     rnn_params, rnn_mle = mle_fit_psycho(rnn_right_block_psychometric_data.T, 'erf_psycho')
 
-    print(10)
-
 
 def compute_model_fixed_points(model,
                                stimulus_val,
@@ -1021,57 +1019,8 @@ def compute_optimal_observers(env,
                               time_delay_penalty,
                               rnn_steps_before_stimulus):
 
-    compute_optimal_observer_block_binary_unknown(session_data=session_data)
-
-    # import numpyro
-    # import numpyro.distributions
-    # from numpyro.infer import MCMC, NUTS
-    # from jax import lax, random
-    # import jax.numpy as np
-    #
-    # trial_end_data = session_data[session_data.trial_end == 1]
-    # trial_side = trial_end_data.trial_side
-    #
-    # def hidden_semi_markov_model(transition_prior,
-    #                              emission_prior,
-    #                              trial_side):
-    #
-    #     num_latents, num_obs = transition_prior.shape[0], emission_prior.shape[0]
-    #     transition_prob = numpyro.sample(
-    #         name='transition_prob',
-    #         fn=numpyro.distributions.Dirichlet(
-    #             np.broadcast_to(transition_prior,
-    #                             shape=(num_latents, num_latents))))
-    #     emission_prob = numpyro.sample(
-    #         name='emission_prob',
-    #         fn=numpyro.distributions.Dirichlet(
-    #             np.broadcast_to(emission_prior,
-    #                             shape=(num_latents, num_obs))))
-    #
-    #     # computes log prob of unsupervised data
-    #     transition_log_prob = np.log(transition_prob)
-    #     emission_log_prob = np.log(emission_prob)
-    #     init_log_prob = emission_log_prob[:, unsupervised_words[0]]
-    #     log_prob = forward_log_prob(init_log_prob, unsupervised_words[1:],
-    #                                 transition_log_prob, emission_log_prob)
-    #     log_prob = logsumexp(log_prob, axis=0, keepdims=True)
-    #     # inject log_prob to potential function
-    #     numpyro.factor('forward_log_prob', log_prob)
-    #
-    # rng_key = random.PRNGKey(seed=1)
-    # num_latents, num_obs = 2, 2
-    # transition_prior = np.ones(num_latents)
-    # emission_prior = np.repeat(0.1, num_obs)
-    # kernel = NUTS(hidden_semi_markov_model)
-    # mcmc = MCMC(
-    #     kernel,
-    #     num_warmup=500,
-    #     num_samples=1000,
-    #     progress_bar=True)
-    # mcmc.run(rng_key, transition_prior, emission_prior)
-    # samples = mcmc.get_samples()
-    # print_results(samples, transition_prob, emission_prob)
-    # print('\nMCMC elapsed time:', time.time() - start)
+    optimal_block_posterior = compute_optimal_observer_block_binary_known(
+        session_data=session_data)
 
     optimal_prob_correct_after_num_obs_blockless, optimal_prob_correct_after_num_obs_blockless_by_trial_strength = \
         compute_optimal_prob_correct_blockless(
@@ -1085,6 +1034,7 @@ def compute_optimal_observers(env,
             time_delay_penalty=time_delay_penalty)
 
     optimal_observers_results = dict(
+        optimal_block_posterior=optimal_block_posterior,
         optimal_prob_correct_after_num_obs_blockless=optimal_prob_correct_after_num_obs_blockless,
         optimal_prob_correct_after_num_obs_blockless_by_trial_strength=optimal_prob_correct_after_num_obs_blockless_by_trial_strength,
         optimal_reward_rate_after_num_obs_blockless=optimal_reward_rate_after_num_obs_blockless,
@@ -1094,19 +1044,42 @@ def compute_optimal_observers(env,
 
 
 def compute_optimal_observer_block_binary_known(session_data):
-    pass
+
+    initial_state_probs = np.array([
+        0.5, 0.5])
+
+    transition_probs = np.array([
+        [0.98, 0.02],
+        [0.02, 0.98]])
+
+    emission_probs = np.array([
+        [0.8, 0.2],
+        [0.2, 0.8]])
+
+    trial_end_data = session_data[session_data.trial_end == 1.]
+    latent_conditional_probs = np.zeros(shape=(len(trial_end_data), 2))
+    trial_sides = ((1 + trial_end_data.trial_side.values) / 2).astype(np.int)
+
+    # joint probability p(x_1, y_1)
+    curr_joint_prob = np.multiply(
+        emission_probs[trial_sides[0], :],
+        initial_state_probs)
+
+    for i, trial_side in enumerate(trial_sides[:-1]):
+        # normalize to get P(y_t | x_{<=t})
+        curr_latent_conditional_prob = curr_joint_prob / np.sum(curr_joint_prob)
+        latent_conditional_probs[i] = curr_latent_conditional_prob
+
+        # P(y_{t+1}, x_{t+1} | x_{<=t}
+        curr_joint_prob = np.multiply(
+            emission_probs[trial_sides[i + 1], :],
+            np.matmul(transition_probs, curr_latent_conditional_prob))
+
+    return latent_conditional_probs
 
 
 def compute_optimal_observer_block_binary_unknown(session_data):
     pass
-#     import pymc3 as pm
-#
-#     with pm.Model() as model:
-#         block_transition = pm.Dirichlet('block_transition', a=np.ones(2), shape=(2, 2))
-#
-#         blocks = StateTransitions('blocks', block_transition, init_probs, shape=len(vals_simple))
-#
-#         y = PoissionProcess('Output', states, lambdas, observed=vals_simple)
 
 
 def compute_optimal_observer_block_continuous(session_data):
