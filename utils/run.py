@@ -203,9 +203,9 @@ def load_checkpoint(train_log_dir,
 
     # replace some defaults
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
-    env_kwargs['blocks_per_session'] = 800
-    # env_kwargs['blocks_per_session'] = 200
-    # env_kwargs['blocks_per_session'] = 80
+    env_kwargs['blocks_per_session'] = 700
+    # env_kwargs['blocks_per_session'] = 400
+    # env_kwargs['blocks_per_session'] = 40
 
     return model, optimizer, global_step, env_kwargs
 
@@ -294,6 +294,7 @@ def stitch_plots(log_dir):
         save_all=True,
         append_images=images[1:])
 
-    for plot_path in plot_paths:
-        os.remove(plot_path)
+    # remove plots
+    # for plot_path in plot_paths:
+    #     os.remove(plot_path)
 

@@ -67,6 +67,12 @@ def add_analysis_data_to_hook_input(hook_input):
         trial_readout_vector=hidden_states_pca_results['trial_readout_vector'],
         pca_trial_readout_vector=hidden_states_pca_results['pca_trial_readout_vector'])
 
+    model_task_aligned_states_results = compute_model_task_aligned_states(
+        session_data=hook_input['session_data'],
+        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
+        pca_trial_readout_vector=hidden_states_pca_results['pca_trial_readout_vector'],
+        pca_block_readout_vector=model_block_readout_vectors_results['pca_block_readout_vector'])
+
     fixed_points_results = compute_model_fixed_points_by_stimulus_and_feedback(
         model=hook_input['model'],
         pca=hidden_states_pca_results['pca'],
@@ -86,7 +92,7 @@ def add_analysis_data_to_hook_input(hook_input):
     reduced_dynamics_results = fit_reduced_dim_dynamics(
         session_data=hook_input['session_data'],
         pca=hidden_states_pca_results['pca'],
-        task_aligned_hidden_states=model_block_readout_vectors_results['task_aligned_hidden_states'])
+        task_aligned_hidden_states=model_task_aligned_states_results['task_aligned_hidden_states'])
 
     model_state_space_vector_fields_results = compute_model_state_space_vector_fields(
         session_data=hook_input['session_data'],
@@ -103,6 +109,7 @@ def add_analysis_data_to_hook_input(hook_input):
         hidden_states_jl_results,
         hidden_states_pca_results,
         model_block_readout_vectors_results,
+        model_task_aligned_states_results,
         fixed_points_results,
         eigenvalues_svd_results,
         reduced_dynamics_results,
@@ -867,16 +874,27 @@ def compute_model_block_readout_vectors(session_data,
                                         pca,
                                         trial_readout_vector,
                                         pca_trial_readout_vector):
-    block_sides = session_data.block_side.values
 
-    # select RIGHT block side readout vector
+    # transform from {-1, 1} to {0, 1}
+    block_sides = (1 + session_data.block_side.values) / 2
+    train_pca_hidden_states, test_pca_hidden_states, train_block_sides, \
+    test_block_sides = train_test_split(
+        pca_hidden_states,
+        block_sides,
+        test_size=.33)
+
     logistic_regression = sm.Logit(
-        endog=(1 + block_sides) / 2,  # transform from {-1, 1} to {0, 1}
-        exog=pca_hidden_states)
+        endog=train_block_sides,
+        exog=train_pca_hidden_states)
     logistic_regression_result = logistic_regression.fit()
+
+    # compute accuracy of classifier
+    predicted_test_block_sides = logistic_regression_result.predict(test_pca_hidden_states)
+    block_classifier_accuracy = np.mean(test_block_sides == np.round(predicted_test_block_sides))
+
     session_data['classifier_block_side'] = 2. * logistic_regression_result.predict(pca_hidden_states) - 1.
 
-    # TODO: compute accuracy of classifier
+    # select RIGHT block side readout vector
     pca_block_readout_vector = logistic_regression_result.params
     pca_block_readout_vector /= np.linalg.norm(pca_block_readout_vector)
     block_readout_vector = np.expand_dims(pca.inverse_transform(pca_block_readout_vector), [0])
@@ -900,17 +918,12 @@ def compute_model_block_readout_vectors(session_data,
 
     logging.info(f'Degrees between PCA vectors: {degrees_btwn_pca_trial_block_vectors}')
 
-    task_aligned_directions = np.stack([
-        pca_trial_readout_vector,
-        pca_block_readout_vector])
-    task_aligned_hidden_states = pca_hidden_states @ task_aligned_directions.T
-
     block_readout_weights_results = dict(
         block_readout_vector=block_readout_vector,
         pca_block_readout_vector=pca_block_readout_vector,
         radians_btwn_pca_trial_block_vectors=radians_btwn_pca_trial_block_vectors,
         degrees_btwn_pca_trial_block_vectors=degrees_btwn_pca_trial_block_vectors,
-        task_aligned_hidden_states=task_aligned_hidden_states)
+        block_classifier_accuracy=block_classifier_accuracy)
 
     return block_readout_weights_results
 
@@ -974,6 +987,31 @@ def compute_model_state_space_vector_fields(session_data,
     return model_state_space_vector_fields_results
 
 
+def compute_model_task_aligned_states(session_data,
+                                      pca_hidden_states,
+                                      pca_trial_readout_vector,
+                                      pca_block_readout_vector):
+
+    task_aligned_directions = np.stack([
+        pca_trial_readout_vector,
+        pca_block_readout_vector])
+    task_aligned_hidden_states = pca_hidden_states @ task_aligned_directions.T
+
+    session_data['magn_along_block_vector'] = np.dot(
+        task_aligned_hidden_states,
+        pca_block_readout_vector.flatten())
+
+    session_data['magn_along_trial_vector'] = np.dot(
+        task_aligned_hidden_states,
+        pca_trial_readout_vector.flatten())
+
+    model_task_aligned_states_results = dict(
+        task_aligned_hidden_states=task_aligned_hidden_states
+    )
+
+    return model_task_aligned_states_results
+
+
 def compute_model_weights_directed_graph(model):
     weights = dict(
         input=model.core.weight_ih_l0.data.numpy(),
@@ -1019,8 +1057,16 @@ def compute_optimal_observers(env,
                               time_delay_penalty,
                               rnn_steps_before_stimulus):
 
-    optimal_block_posterior = compute_optimal_observer_block_binary_known(
-        session_data=session_data)
+    compute_optimal_block_side_inference(
+        session_data=session_data,
+        env=env)
+
+    compute_optimal_trial_side_inference(
+        session_data=session_data,
+        env=env)
+
+    # compute_optimal_coupled_observer(
+    #     session_data=session_data)
 
     optimal_prob_correct_after_num_obs_blockless, optimal_prob_correct_after_num_obs_blockless_by_trial_strength = \
         compute_optimal_prob_correct_blockless(
@@ -1034,7 +1080,6 @@ def compute_optimal_observers(env,
             time_delay_penalty=time_delay_penalty)
 
     optimal_observers_results = dict(
-        optimal_block_posterior=optimal_block_posterior,
         optimal_prob_correct_after_num_obs_blockless=optimal_prob_correct_after_num_obs_blockless,
         optimal_prob_correct_after_num_obs_blockless_by_trial_strength=optimal_prob_correct_after_num_obs_blockless_by_trial_strength,
         optimal_reward_rate_after_num_obs_blockless=optimal_reward_rate_after_num_obs_blockless,
@@ -1043,7 +1088,76 @@ def compute_optimal_observers(env,
     return optimal_observers_results
 
 
-def compute_optimal_observer_block_binary_known(session_data):
+def compute_optimal_coupled_observer(session_data):
+
+    # see https://github.com/bayespy/bayespy/issues/28
+
+    non_blank_data = session_data[(session_data.left_stimulus != 0) &
+                                  (session_data.right_stimulus != 0)]
+
+    from bayespy.nodes import Categorical, CategoricalMarkovChain, Dirichlet,\
+        Gaussian, Mixture, Wishart
+
+    num_latent_variables = 4
+    initial_state_probs = Dirichlet(np.array([10, 1, 10, 1]))
+
+    transition_probs = Dirichlet(10*np.array([
+        [0.5, 0.5, 0.98*0.2, 0.02*0.8],  # s_n = L, b_n = L
+        [0.02*0.8, 0.98*0.2, 0.02*0.2, 0.98*0.8],  # s_n = L, b_n = R
+        [0.98*0.2, 0.02*0.2, 0.98, 0.02],  # s_n = R, b_n = L
+        [0.02*0.8, 0.98*0.2, 0.02, 0.98],  # s_n = R, b_n = R
+    ]))
+
+    latents = CategoricalMarkovChain(
+        pi=initial_state_probs,
+        A=transition_probs,
+        states=len(non_blank_data))
+
+    # approximate observation as Gaussian
+    mu_est = Gaussian(np.zeros(1), 1e-5*np.identity(1), plates=(num_latent_variables,))
+    Lambda_est = Wishart(1, np.identity(1), plates=(num_latent_variables,))
+
+    mu_est = Gaussian(
+        np.array([]),
+        1e-5 * np.identity(1),
+        plates=(num_latent_variables,))
+    Lambda_est = Wishart(1, np.identity(1), plates=(num_latent_variables,))
+
+    observations = Mixture(latents, Gaussian, mu_est, Lambda_est)
+
+    diff_obs = non_blank_data['right_stimulus'] - non_blank_data['left_stimulus']
+    # reshape to (number of non-blank dts, 1)
+    diff_obs = np.expand_dims(diff_obs.values, axis=1)
+    observations.observe(diff_obs)
+
+    # Random initialization to break the symmetry
+    # transition_probs.initialize_from_random()
+    mu_est.initialize_from_random()
+
+    # Reasonable initialization for Lambda
+    Lambda_est.initialize_from_value(np.identity(1))
+
+    from bayespy.inference import VB
+    Q = VB(observations, latents, mu_est, Lambda_est, transition_probs, initial_state_probs)
+
+    # use deterministic annealing to reduce sensitivity to initial conditions
+    # https://www.bayespy.org/user_guide/advanced.html#deterministic-annealing
+    beta = 0.1
+    while beta < 1.0:
+        beta = min(beta * 1.5, 1.0)
+        Q.set_annealing(beta)
+        Q.update(repeat=250, tol=1e-4)
+
+    # recover transition probabilities by dividing by row sum
+    initial_state_probs_posterior = Categorical(initial_state_probs).get_moments()[0]
+    transition_probs_posterior = Categorical(transition_probs).get_moments()[0]
+    logging.info('Crippled Bayesian Observer Transition Parameters:')
+    logging.info(str(transition_probs_posterior))
+
+
+
+def compute_optimal_block_side_inference(session_data,
+                                         env):
 
     initial_state_probs = np.array([
         0.5, 0.5])
@@ -1066,24 +1180,128 @@ def compute_optimal_observer_block_binary_known(session_data):
         initial_state_probs)
 
     for i, trial_side in enumerate(trial_sides[:-1]):
-        # normalize to get P(y_t | x_{<=t})
+        # normalize to get P(b_n | s_{<=n})
+        # np.sum(curr_joint_prob) is marginalizing over b_{n} i.e. \sum_{b_n} P(b_n, s_n |x_{<=n-1})
         curr_latent_conditional_prob = curr_joint_prob / np.sum(curr_joint_prob)
         latent_conditional_probs[i] = curr_latent_conditional_prob
 
-        # P(y_{t+1}, x_{t+1} | x_{<=t}
+        # P(y_{t+1}, x_{t+1} | x_{<=t})
         curr_joint_prob = np.multiply(
             emission_probs[trial_sides[i + 1], :],
             np.matmul(transition_probs, curr_latent_conditional_prob))
 
-    return latent_conditional_probs
+    # right block posterior, right block prior
+    session_data['optimal_block_posterior_right'] = np.nan
+    session_data.loc[trial_end_data.index, 'optimal_block_posterior_right'] = latent_conditional_probs[:, 1]
+    session_data['optimal_block_prior_right'] = session_data['optimal_block_posterior_right'].shift(1)
+
+    # right stimulus prior
+    session_data['optimal_stimulus_prior_right'] = np.nan
+    block_prior_indices = ~pd.isna(session_data['optimal_block_prior_right'])
+    optimal_stimulus_prior_right = np.matmul(latent_conditional_probs[:-1, :], emission_probs.T)
+    session_data.loc[block_prior_indices, 'optimal_stimulus_prior_right'] = optimal_stimulus_prior_right[:, 1]
+
+    # manually specify that first block prior and first stimulus prior should be 0.5
+    # before evidence, this is the correct prior
+    session_data.loc[0, 'optimal_block_prior_right'] = 0.5
+    session_data.loc[0, 'optimal_stimulus_prior_right'] = 0.5
 
 
-def compute_optimal_observer_block_binary_unknown(session_data):
-    pass
+def compute_optimal_trial_side_inference(session_data,
+                                         env):
 
+    strength_means = np.sort(session_data.signed_trial_strength.unique())
+    prob_mu = env.possible_trial_strengths_probs
 
-def compute_optimal_observer_block_continuous(session_data):
-    pass
+    # P(mu_n | s_n) as a matrix with shape (2 * number of stimulus strengths - 1, 2)
+    # - 1 is for stimulus strength 0, which both stimulus sides can generate
+    prob_mu_given_stim_side = np.zeros(shape=(len(strength_means), 2))
+    prob_mu_given_stim_side[:len(prob_mu), 0] = prob_mu[::-1]
+    prob_mu_given_stim_side[len(prob_mu)-1:, 1] = prob_mu
+
+    diff_obs = session_data['right_stimulus'] - session_data['left_stimulus']
+
+    session_data['optimal_stimulus_posterior_right'] = np.nan
+    for (session_idx, block_idx, trial_idx), trial_data in session_data.groupby([
+        'session_index', 'block_index', 'trial_index']):
+
+        optimal_stimulus_prior_right = trial_data['optimal_stimulus_prior_right'].iloc[0]
+        optimal_stim_prior = np.array([1 - optimal_stimulus_prior_right, optimal_stimulus_prior_right])
+
+        # P(\mu_n, s_n | history) = P(\mu_n | s_n) P(s_n | history)
+        # shape = (# of possible signed stimuli strengths, num trial sides)
+        stim_side_strength_joint_prob = np.einsum(
+            'ij,j->ij',
+            prob_mu_given_stim_side,
+            optimal_stim_prior)
+
+        # exclude blank dts
+        dt_indices = trial_data.iloc[env.rnn_steps_before_stimulus:].index
+        trial_diff_obs = diff_obs[trial_data.index].values[
+                         env.rnn_steps_before_stimulus:]
+
+        # P(o_t | \mu_n, s_n) , also = P(o_t | \mu_n)
+        # shape = (num of observations, # of possible signed stimuli strengths)
+        individual_diff_obs_likelihood = scipy.stats.norm.pdf(
+            np.expand_dims(trial_diff_obs, axis=1),
+            loc=strength_means,
+            scale=np.sqrt(2) * np.ones_like(strength_means))  # scale is std dev
+
+        # P(o_{<=t} | \mu_n, s_n) = P(o_{<=t} | \mu_n)
+        # shape = (num of observations, # of possible signed stimuli strengths)
+        running_diff_obs_likelihood = np.cumprod(
+            individual_diff_obs_likelihood,
+            axis=0)
+
+        # P(o_{<=t}, \mu_n, s_n | history) = P(o_{<=t} | \mu_n, s_n) P(\mu_n, s_n | history)
+        # shape = (num of observations, # of possible signed stimuli strengths, # of trial sides i.e. 2)
+        running_diff_obs_stim_side_strength_joint_prob = np.einsum(
+            'ij,jk->ijk',
+            running_diff_obs_likelihood,
+            stim_side_strength_joint_prob)
+        assert len(running_diff_obs_stim_side_strength_joint_prob.shape) == 3
+
+        # marginalize out mu_n
+        # shape = (num of observations, # of trial sides i.e. 2)
+        running_diff_obs_stim_side_joint_prob = np.sum(
+            running_diff_obs_stim_side_strength_joint_prob,
+            axis=1)
+        assert len(running_diff_obs_stim_side_joint_prob.shape) == 2
+
+        # normalize by p(o_{<=t})
+        # shape = (num of observations, # of trial sides i.e. 2)
+        running_diff_obs_marginal_prob = np.sum(
+            running_diff_obs_stim_side_joint_prob,
+            axis=1)
+        assert len(running_diff_obs_marginal_prob.shape) == 1
+
+        # shape = (num of observations, # of trial sides i.e. 2)
+        optimal_stim_posterior = np.divide(
+            running_diff_obs_stim_side_joint_prob,
+            np.expand_dims(running_diff_obs_marginal_prob, axis=1)  # expand to broadcast
+        )
+        assert np.allclose(
+            np.sum(optimal_stim_posterior, axis=1),
+            np.ones(len(optimal_stim_posterior)))
+
+        session_data.loc[dt_indices, 'optimal_stimulus_posterior_right'] = \
+            optimal_stim_posterior[:, 1]
+
+    # determine ideal Bayesian observer action i.e. the MAP
+    session_data['optimal_action_side'] = \
+        2 * session_data['optimal_stimulus_posterior_right'].round() - 1
+    session_data['optimal_correct_action_taken'] = \
+        session_data['optimal_action_side'] == session_data['trial_side']
+    # checking equality with one nan value (e.g. 1 == nan) returns False instead nan
+    session_data.loc[pd.isna(session_data['optimal_action_side']),
+                     'optimal_correct_action_taken'] = np.nan
+
+    # log fraction of correct actions
+    optimal_correct_action_taken_by_action_taken = session_data['optimal_correct_action_taken'].mean()
+    logging.info(f'Optimal Fraction of Correct Actions Taken by Total Actions Taken: '
+                 f'{optimal_correct_action_taken_by_action_taken}')
+
+    # temp = session_data.loc[0:11, ['block_index', 'trial_index', 'rnn_step_index', 'signed_trial_strength', 'left_stimulus', 'right_stimulus', 'optimal_stimulus_prior_right', 'optimal_stimulus_posterior_right']]
 
 
 def compute_optimal_prob_correct_blockless(session_data,

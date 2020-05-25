@@ -27,7 +27,8 @@ def main():
                               momentum=0.1))
 
     envs = create_biased_choice_worlds(
-        num_sessions=1)
+        num_sessions=1,  # batch size
+    )
 
     start_grad_step = 0
     num_grad_steps = 100001

@@ -146,8 +146,8 @@ class IBLSession(gym.Env):
         loss = self.loss_fn(
             target=correct_action_index.reshape((1,)).long(),
             action_probs=model_prob_output,
-            is_blank_rnn_step=is_blank_rnn_step)
-        self.losses[self.current_rnn_step_within_session] = loss  # * self.current_rnn_step_within_trial
+            is_blank_rnn_step=is_blank_rnn_step)  # * self.current_rnn_step_within_trial
+        self.losses[self.current_rnn_step_within_session] = loss
 
         is_timeout = (self.current_rnn_step_within_trial + 1) == self.max_rnn_steps_per_trial
         reward = self.reward_fn(
@@ -418,8 +418,8 @@ def create_biased_choice_worlds(num_sessions=11,
     in blocks of trials."
     """
 
-    num_means = 5
-    possible_trial_strengths = tuple(np.linspace(0., 2.4, num_means))
+    num_means = 6
+    possible_trial_strengths = tuple(np.linspace(0., 2.5, num_means))
     possible_trial_strengths_probs = (1 / num_means,) * num_means
     block_side_p = 0.8
 

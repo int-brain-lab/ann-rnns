@@ -49,7 +49,9 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),
         (0, utils.plot.hook_plot_task_stimuli_and_model_prob_in_first_n_trials),
         # (0, utils.plot.hook_plot_analysis_psytrack_fit),
-        (0, utils.plot.hook_plot_behav_dts_per_trial_by_stimuli_strength),
+        (0, utils.plot.hook_plot_behav_dts_per_trial_by_strength),
+        (0, utils.plot.hook_plot_behav_dts_per_trial_by_strength_correct_concordant),
+        (0, utils.plot.hook_plot_behav_dts_per_trial_by_strength_correct_concordant),
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_dts_within_trial),
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_trial_within_block),
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_zero_contrast_trial_within_block),
@@ -73,7 +75,7 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_state_space_reduced_dim_approximation),
         (0, utils.plot.hook_plot_state_space_trajectories_within_block),
         (0, utils.plot.hook_plot_state_space_trajectories_within_trial),
-        (0, utils.plot.hook_plot_state_space_trials_by_classifier_and_trial_index),
+        (0, utils.plot.hook_plot_state_space_trials_by_classifier),
         (0, utils.plot.hook_plot_state_space_vector_fields_full_coverage),
         (0, utils.plot.hook_plot_state_space_vector_fields_real_coverage),
         # (0, utils.plot.hook_plot_pca_hidden_state_trajectories_controlled),
@@ -107,7 +109,7 @@ def create_hook_fns_train(start_grad_step,
         # (plot_freq, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),
         # (plot_freq, utils.plot.hook_plot_task_stimuli_and_model_prob_in_first_n_trials),
         # (plot_freq, utils.plot.hook_plot_behav_dts_per_trial_by_stimuli_strength),
-        (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_by_dts_within_trial),
+        # (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_by_dts_within_trial),
         # (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_by_trial_within_block),
         # (plot_freq, utils.plot.hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_trial_strength),
         # (plot_freq, utils.plot.hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration),
@@ -271,7 +273,7 @@ def hook_write_scalars(hook_input):
         global_step=hook_input['grad_step'])
 
     # plot the variance, fraction of variance for the first 3 PCs (arbitrary cutoff)
-    num_pcs_to_plot = 3
+    num_pcs_to_plot = 4
     total_variance = np.sum(hook_input['variance_explained'])
     for i in range(num_pcs_to_plot):
         hook_input['tensorboard_writer'].add_scalar(
