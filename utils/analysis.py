@@ -46,8 +46,8 @@ def add_analysis_data_to_hook_input(hook_input):
     # convert from shape (number of total time steps, num hidden layers, hidden size) to
     # shape (number of total time steps, num hidden layers * hidden size)
 
-    compute_behav_psychometric_comparison_between_model_and_mice(
-        session_data=hook_input['session_data'])
+    # compute_behav_psychometric_comparison_between_model_and_mice(
+    #     session_data=hook_input['session_data'])
 
     reshaped_hidden_states = hook_input['hidden_states'].reshape(
         hook_input['hidden_states'].shape[0], -1)
@@ -62,6 +62,7 @@ def add_analysis_data_to_hook_input(hook_input):
 
     model_block_readout_vectors_results = compute_model_block_readout_vectors(
         session_data=hook_input['session_data'],
+        hidden_states=reshaped_hidden_states,
         pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
         pca=hidden_states_pca_results['pca'],
         trial_readout_vector=hidden_states_pca_results['trial_readout_vector'],
@@ -104,6 +105,9 @@ def add_analysis_data_to_hook_input(hook_input):
         rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_stimulus,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty)
 
+    mice_behavior_data_results = load_mice_behavioral_data(
+        mouse_behavior_dir_path='data/ibl-data-may2020')
+
     # add results to hook_input
     result_dicts = [
         hidden_states_jl_results,
@@ -114,7 +118,8 @@ def add_analysis_data_to_hook_input(hook_input):
         eigenvalues_svd_results,
         reduced_dynamics_results,
         model_state_space_vector_fields_results,
-        optimal_observers_results]
+        optimal_observers_results,
+        mice_behavior_data_results]
     for result_dict in result_dicts:
         hook_input.update(result_dict)
 
@@ -870,6 +875,7 @@ def compute_model_hidden_states_pca(hidden_states,
 
 
 def compute_model_block_readout_vectors(session_data,
+                                        hidden_states,
                                         pca_hidden_states,
                                         pca,
                                         trial_readout_vector,
@@ -877,20 +883,28 @@ def compute_model_block_readout_vectors(session_data,
 
     # transform from {-1, 1} to {0, 1}
     block_sides = (1 + session_data.block_side.values) / 2
-    train_pca_hidden_states, test_pca_hidden_states, train_block_sides, \
-    test_block_sides = train_test_split(
-        pca_hidden_states,
-        block_sides,
-        test_size=.33)
 
-    logistic_regression = sm.Logit(
-        endog=train_block_sides,
-        exog=train_pca_hidden_states)
-    logistic_regression_result = logistic_regression.fit()
+    # do classification twice, one in high dimension, once in PCA space
+    names = ['full', 'pca']
+    regressors = [hidden_states, pca_hidden_states]
+    classifier_accuracy = dict()
+    for name, regressor in zip(names, regressors):
+        train_regressor, test_regressor, train_block_sides, \
+        test_block_sides = train_test_split(
+            regressor,
+            block_sides,
+            test_size=.33)
 
-    # compute accuracy of classifier
-    predicted_test_block_sides = logistic_regression_result.predict(test_pca_hidden_states)
-    block_classifier_accuracy = np.mean(test_block_sides == np.round(predicted_test_block_sides))
+        logistic_regression = sm.Logit(
+            endog=train_block_sides,
+            exog=train_regressor)
+        logistic_regression_result = logistic_regression.fit()
+
+        # compute accuracy of classifier
+        predicted_test_block_sides = logistic_regression_result.predict(test_regressor)
+        block_classifier_accuracy = np.mean(test_block_sides == np.round(predicted_test_block_sides))
+
+        classifier_accuracy[name] = block_classifier_accuracy
 
     session_data['classifier_block_side'] = 2. * logistic_regression_result.predict(pca_hidden_states) - 1.
 
@@ -923,7 +937,8 @@ def compute_model_block_readout_vectors(session_data,
         pca_block_readout_vector=pca_block_readout_vector,
         radians_btwn_pca_trial_block_vectors=radians_btwn_pca_trial_block_vectors,
         degrees_btwn_pca_trial_block_vectors=degrees_btwn_pca_trial_block_vectors,
-        block_classifier_accuracy=block_classifier_accuracy)
+        full_block_classifier_accuracy=classifier_accuracy['full'],
+        pca_block_classifier_accuracy=classifier_accuracy['pca'])
 
     return block_readout_weights_results
 
@@ -1505,6 +1520,37 @@ def fit_reduced_dim_dynamics(session_data,
         error_accumulation_df=error_accumulation_df)
 
     return reduced_dynamics_results
+
+
+def load_mice_behavioral_data(mouse_behavior_dir_path):
+    mice_behavior_df = []
+    for mouse_csv_path in os.listdir(mouse_behavior_dir_path):
+        if mouse_csv_path.split('_')[-1].startswith('endtrain'):
+            continue
+        mouse_behav_df = pd.read_csv(os.path.join(mouse_behavior_dir_path, mouse_csv_path))
+        mice_behavior_df.append(mouse_behav_df)
+    mice_behavior_df = pd.concat(mice_behavior_df)
+
+    # drop unbiased blocks
+    mice_behavior_df = mice_behavior_df[mice_behavior_df['stim_probability_left'] != .5]
+
+    # convert stim_prob_left from 0.8 and 0.2 to -1, 1
+    mice_behavior_df['block_side'] = np.where(
+        mice_behavior_df['stim_probability_left'] == .8, -1, 1)
+
+    # convert postion from +-35.0 to -1, 1
+    mice_behavior_df['stimulus_side'] = mice_behavior_df['position'] / 35.
+
+    # determine whether stimulus side and block side are concordant
+    mice_behavior_df['concordant_trial'] = mice_behavior_df['block_side'] == mice_behavior_df['stimulus_side']
+
+    # create signed contrast
+    mice_behavior_df['signed_contrast'] = mice_behavior_df['contrast'] * mice_behavior_df['stimulus_side']
+
+    mice_behavior_data_results = dict(
+        mice_behavior_df=mice_behavior_df)
+
+    return mice_behavior_data_results
 
 
 def run_model_one_step(model,

@@ -2,7 +2,6 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import sys
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.analysis import add_analysis_data_to_hook_input
@@ -14,9 +13,9 @@ from utils.run import convert_session_data_to_ibl_changepoint_csv, create_logger
 
 def main():
 
-    # run_dir = 'rnn, block_side_probs=0.80, snr=2.5'  # SNR out to 2.5
+    run_dir = 'rnn, block_side_probs=0.80, snr=2.5'  # SNR out to 2.5
     # run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-05-20 13:10:53.203469'  # SNR = 2.5, correct loss
-    run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-05-24 20:48:14.174498'  # totally untrained
+    # run_dir = 'rnn, block_side_probs=0.80, snr=2.5, no_training'  # totally untrained
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
@@ -45,6 +44,9 @@ def main():
         start_grad_step=grad_step,
         num_grad_steps=0,
         tag_prefix='analyze/')
+
+    # stitch figures together into single PDF for easy use
+    stitch_plots(log_dir=tensorboard_writer.log_dir)
 
     # convert_session_data_to_ibl_changepoint_csv(
     #     session_data=analyze_model_output['run_envs_output']['session_data'],
@@ -111,11 +113,9 @@ def analyze_model(model,
         # save figures to disk
         fn_name = str(hook_fn).split(' ')[1] + '.jpg'
         fig = plt.gcf()  # load whatever figure was created by hook_fn
-        fig.savefig(os.path.join(tensorboard_writer.log_dir, fn_name))
+        fig.savefig(os.path.join(tensorboard_writer.log_dir, fn_name),
+                    bbox_inches='tight')  # removes surrounding whitespace
         plt.close(fig)
-
-    # stitch figures together into single PDF for easy use
-    stitch_plots(log_dir=tensorboard_writer.log_dir)
 
     # recurrent_jacobian = hook_input['fixed_point_df']['jacobian_hidden'][0]
     # import scipy.linalg

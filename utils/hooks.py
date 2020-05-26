@@ -44,6 +44,7 @@ def create_hook_fns_dict(hook_fns_frequencies,
 def create_hook_fns_analyze(start_grad_step):
     hook_fns_frequencies = [
         (0, hook_write_scalars),
+        (0, utils.plot.hook_plot_state_space_movement_along_task_aligned_vectors),
         (0, utils.plot.hook_plot_task_block_side_trial_side_by_trial_number),
         (0, utils.plot.hook_plot_task_stimuli_by_block_side),
         (0, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),
@@ -55,24 +56,28 @@ def create_hook_fns_analyze(start_grad_step):
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_dts_within_trial),
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_trial_within_block),
         (0, utils.plot.hook_plot_behav_prob_correct_action_by_zero_contrast_trial_within_block),
-        (0, utils.plot.hook_plot_behav_prob_correct_action_on_block_side_trial_side_by_trial_strength),
+        (0, utils.plot.hook_plot_behav_prob_correct_by_strength_trial_block),
         (0, utils.plot.hook_plot_behav_prob_correct_slope_intercept_by_prev_block_duration),
         (0, utils.plot.hook_plot_behav_right_action_by_signed_contrast),
         # (0, utils.plot.hook_plot_behav_right_action_after_error_by_right_action_after_correct),
         (0, utils.plot.hook_plot_behav_subj_prob_block_switch_by_signed_trial_strength),
         (0, utils.plot.hook_plot_behav_trial_outcome_by_trial_strength),
+        (0, utils.plot.hook_plot_mice_reaction_time_by_strength_correct_concordant),
+        (0, utils.plot.hook_plot_mice_prob_correct_by_strength_trial_block),
         (0, utils.plot.hook_plot_model_hidden_unit_correlations),
         (0, utils.plot.hook_plot_model_hidden_unit_fraction_var_explained),
         (0, utils.plot.hook_plot_model_weights_and_gradients),
         # (plot_freq, utils.plot.hook_plot_model_weights_community_detection),
-        (0, utils.plot.hook_plot_optimal_observer_block_posterior),
-        # (0, utils.plot.hook_plot_state_space_fixed_points),
+        (0, utils.plot.hook_plot_optimal_observer_block_posterior_multiple_blocks),
+        (0, utils.plot.hook_plot_optimal_observer_block_posterior_single_block),
+        (0, utils.plot.hook_plot_reduced_dim_state_space_distance_decoherence),
+        (0, utils.plot.hook_plot_reduced_dim_state_space_trajectories_within_block),
+        (0, utils.plot.hook_plot_reduced_dim_state_space_trajectories_within_trial),
         (0, utils.plot.hook_plot_state_space_effect_of_feedback),
         (0, utils.plot.hook_plot_state_space_fixed_point_basins_of_attraction),
         (0, utils.plot.hook_plot_state_space_fixed_point_search),
         (0, utils.plot.hook_plot_state_space_projection_on_right_block_vector_by_trial_within_block),
         (0, utils.plot.hook_plot_state_space_projection_on_right_trial_vector_by_dts_within_trial),
-        (0, utils.plot.hook_plot_state_space_reduced_dim_approximation),
         (0, utils.plot.hook_plot_state_space_trajectories_within_block),
         (0, utils.plot.hook_plot_state_space_trajectories_within_trial),
         (0, utils.plot.hook_plot_state_space_trials_by_classifier),
@@ -272,8 +277,8 @@ def hook_write_scalars(hook_input):
                           for i in range(len(hook_input['envs']))]),
         global_step=hook_input['grad_step'])
 
-    # plot the variance, fraction of variance for the first 3 PCs (arbitrary cutoff)
-    num_pcs_to_plot = 4
+    # plot the variance, fraction of variance for the first 4 PCs (arbitrary cutoff)
+    num_pcs_to_plot = min(4, len(hook_input['variance_explained']))
     total_variance = np.sum(hook_input['variance_explained'])
     for i in range(num_pcs_to_plot):
         hook_input['tensorboard_writer'].add_scalar(
