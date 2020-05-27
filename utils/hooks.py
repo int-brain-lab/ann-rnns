@@ -44,7 +44,7 @@ def create_hook_fns_dict(hook_fns_frequencies,
 def create_hook_fns_analyze(start_grad_step):
     hook_fns_frequencies = [
         (0, hook_write_scalars),
-        (0, utils.plot.hook_plot_state_space_movement_along_task_aligned_vectors),
+        (0, utils.plot.hook_plot_state_space_evidence_accumulation_along_task_aligned_vectors),
         (0, utils.plot.hook_plot_task_block_side_trial_side_by_trial_number),
         (0, utils.plot.hook_plot_task_stimuli_by_block_side),
         (0, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),

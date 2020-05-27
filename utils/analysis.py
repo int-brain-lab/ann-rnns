@@ -22,8 +22,7 @@ import torch.autograd
 import torch.optim
 
 from utils.env import create_custom_worlds
-from utils.run import run_envs
-
+from utils.run import create_model, run_envs
 
 possible_stimuli = torch.DoubleTensor(
     [[1.2, 0.2],
@@ -43,12 +42,12 @@ possible_feedback = torch.DoubleTensor(
 
 
 def add_analysis_data_to_hook_input(hook_input):
-    # convert from shape (number of total time steps, num hidden layers, hidden size) to
-    # shape (number of total time steps, num hidden layers * hidden size)
 
     # compute_behav_psychometric_comparison_between_model_and_mice(
     #     session_data=hook_input['session_data'])
 
+    # convert from shape (number of total time steps, num hidden layers, hidden size) to
+    # shape (number of total time steps, num hidden layers * hidden size)
     reshaped_hidden_states = hook_input['hidden_states'].reshape(
         hook_input['hidden_states'].shape[0], -1)
 
@@ -90,10 +89,17 @@ def add_analysis_data_to_hook_input(hook_input):
     eigenvalues_svd_results = compute_eigenvalues(
         matrix=reshaped_hidden_states)
 
-    reduced_dynamics_results = fit_reduced_dim_dynamics(
+    reduced_dim_model_results = fit_reduced_dim_model(
         session_data=hook_input['session_data'],
         pca=hidden_states_pca_results['pca'],
         task_aligned_hidden_states=model_task_aligned_states_results['task_aligned_hidden_states'])
+
+    run_reduced_dim_model_results = run_reduced_dim_model(
+        model_readout_norm=np.linalg.norm(hook_input['model'].readout.weight.data.numpy()),
+        model_hidden_dim=hook_input['model'].model_kwargs['core_kwargs']['hidden_size'],
+        envs=hook_input['envs'],
+        recurrent_matrix=reduced_dim_model_results['A_prime'],
+        input_matrix=reduced_dim_model_results['B_prime'])
 
     model_state_space_vector_fields_results = compute_model_state_space_vector_fields(
         session_data=hook_input['session_data'],
@@ -116,7 +122,8 @@ def add_analysis_data_to_hook_input(hook_input):
         model_task_aligned_states_results,
         fixed_points_results,
         eigenvalues_svd_results,
-        reduced_dynamics_results,
+        reduced_dim_model_results,
+        run_reduced_dim_model_results,
         model_state_space_vector_fields_results,
         optimal_observers_results,
         mice_behavior_data_results]
@@ -162,7 +169,6 @@ def compute_eigenvalues(matrix):
 
 
 def compute_behav_psychometric_comparison_between_model_and_mice(session_data):
-
     # only take consider last dt within a trial
     action_data = session_data.loc[
         session_data['action_taken'] == 1,
@@ -880,7 +886,6 @@ def compute_model_block_readout_vectors(session_data,
                                         pca,
                                         trial_readout_vector,
                                         pca_trial_readout_vector):
-
     # transform from {-1, 1} to {0, 1}
     block_sides = (1 + session_data.block_side.values) / 2
 
@@ -902,7 +907,8 @@ def compute_model_block_readout_vectors(session_data,
 
         # compute accuracy of classifier
         predicted_test_block_sides = logistic_regression_result.predict(test_regressor)
-        block_classifier_accuracy = np.mean(test_block_sides == np.round(predicted_test_block_sides))
+        block_classifier_accuracy = np.mean(
+            test_block_sides == np.round(predicted_test_block_sides))
 
         classifier_accuracy[name] = block_classifier_accuracy
 
@@ -965,7 +971,7 @@ def compute_model_state_space_vector_fields(session_data,
             # make sure last value is False to prevent indexing issues on last dt
             task_condition_rows[len(task_condition_rows) - 1] = False
         else:  # equal stimulus, strong left, or strong right
-            task_condition_rows = (session_data.reward.shift(1) == feedback_val.item()) &\
+            task_condition_rows = (session_data.reward.shift(1) == feedback_val.item()) & \
                                   (stimulus_val[0].item() - 0.15 <= session_data.left_stimulus) & \
                                   (session_data.left_stimulus <= stimulus_val[0].item() + 0.15) & \
                                   (stimulus_val[1].item() - 0.15 <= session_data.right_stimulus) & \
@@ -1006,7 +1012,6 @@ def compute_model_task_aligned_states(session_data,
                                       pca_hidden_states,
                                       pca_trial_readout_vector,
                                       pca_block_readout_vector):
-
     task_aligned_directions = np.stack([
         pca_trial_readout_vector,
         pca_block_readout_vector])
@@ -1021,6 +1026,7 @@ def compute_model_task_aligned_states(session_data,
         pca_trial_readout_vector.flatten())
 
     model_task_aligned_states_results = dict(
+        task_aligned_directions=task_aligned_directions,
         task_aligned_hidden_states=task_aligned_hidden_states
     )
 
@@ -1080,8 +1086,8 @@ def compute_optimal_observers(env,
         session_data=session_data,
         env=env)
 
-    # compute_optimal_coupled_observer(
-    #     session_data=session_data)
+    coupled_observer_results = compute_coupled_observer(
+        session_data=session_data)
 
     optimal_prob_correct_after_num_obs_blockless, optimal_prob_correct_after_num_obs_blockless_by_trial_strength = \
         compute_optimal_prob_correct_blockless(
@@ -1098,29 +1104,30 @@ def compute_optimal_observers(env,
         optimal_prob_correct_after_num_obs_blockless=optimal_prob_correct_after_num_obs_blockless,
         optimal_prob_correct_after_num_obs_blockless_by_trial_strength=optimal_prob_correct_after_num_obs_blockless_by_trial_strength,
         optimal_reward_rate_after_num_obs_blockless=optimal_reward_rate_after_num_obs_blockless,
-        optimal_reward_rate_after_num_obs_blockless_by_trial_strength=optimal_reward_rate_after_num_obs_blockless_by_trial_strength)
+        optimal_reward_rate_after_num_obs_blockless_by_trial_strength=optimal_reward_rate_after_num_obs_blockless_by_trial_strength,
+        coupled_observer_initial_state_posterior=coupled_observer_results['coupled_observer_initial_state_posterior'],
+        coupled_observer_transition_posterior=coupled_observer_results['coupled_observer_transition_posterior'],
+    )
 
     return optimal_observers_results
 
 
-def compute_optimal_coupled_observer(session_data):
-
+def compute_coupled_observer(session_data):
     # see https://github.com/bayespy/bayespy/issues/28
-
     non_blank_data = session_data[(session_data.left_stimulus != 0) &
                                   (session_data.right_stimulus != 0)]
 
-    from bayespy.nodes import Categorical, CategoricalMarkovChain, Dirichlet,\
+    from bayespy.nodes import Categorical, CategoricalMarkovChain, Dirichlet, \
         Gaussian, Mixture, Wishart
 
     num_latent_variables = 4
-    initial_state_probs = Dirichlet(np.array([10, 1, 10, 1]))
+    initial_state_probs = Dirichlet(np.array([.4, .1, .1, .4]))
 
     transition_probs = Dirichlet(10*np.array([
-        [0.5, 0.5, 0.98*0.2, 0.02*0.8],  # s_n = L, b_n = L
-        [0.02*0.8, 0.98*0.2, 0.02*0.2, 0.98*0.8],  # s_n = L, b_n = R
-        [0.98*0.2, 0.02*0.2, 0.98, 0.02],  # s_n = R, b_n = L
-        [0.02*0.8, 0.98*0.2, 0.02, 0.98],  # s_n = R, b_n = R
+        [0.98 * 0.8, 0.02 * 0.8, 0.98 * 0.8, 0.02 * 0.2],  # b_n = L, s_n = L
+        [0.02 * 0.2, 0.98 * 0.2, 0.02 * 0.2, 0.98 * 0.2],  # b_n = R, s_n = L
+        [0.98 * 0.2, 0.02 * 0.2, 0.98 * 0.2, 0.02 * 0.2],  # b_n = L, s_n = R
+        [0.02 * 0.8, 0.98 * 0.8, 0.02 * 0.8, 0.98 * 0.8],  # b_n = R, s_n = R
     ]))
 
     latents = CategoricalMarkovChain(
@@ -1128,17 +1135,16 @@ def compute_optimal_coupled_observer(session_data):
         A=transition_probs,
         states=len(non_blank_data))
 
-    # approximate observation as Gaussian
-    mu_est = Gaussian(np.zeros(1), 1e-5*np.identity(1), plates=(num_latent_variables,))
-    Lambda_est = Wishart(1, np.identity(1), plates=(num_latent_variables,))
-
-    mu_est = Gaussian(
-        np.array([]),
-        1e-5 * np.identity(1),
+    # approximate observation as mixture of Gaussians
+    mu = Gaussian(
+        np.zeros(1),
+        np.identity(1),
         plates=(num_latent_variables,))
-    Lambda_est = Wishart(1, np.identity(1), plates=(num_latent_variables,))
+    Lambda = Wishart(
+        1,
+        1e-6*np.identity(1))
 
-    observations = Mixture(latents, Gaussian, mu_est, Lambda_est)
+    observations = Mixture(latents, Gaussian, mu, Lambda)
 
     diff_obs = non_blank_data['right_stimulus'] - non_blank_data['left_stimulus']
     # reshape to (number of non-blank dts, 1)
@@ -1146,14 +1152,16 @@ def compute_optimal_coupled_observer(session_data):
     observations.observe(diff_obs)
 
     # Random initialization to break the symmetry
-    # transition_probs.initialize_from_random()
-    mu_est.initialize_from_random()
+    # I want to specify the means and variance of mu, but I can't figure out how
+    avg_diff = np.mean(diff_obs[non_blank_data.trial_side == 1.])
+    mu.u[0] = avg_diff * np.array([-1., -1., 1., 1.])[:, np.newaxis]  # shape (4, 1)
+    mu.u[1] = np.ones(shape=(num_latent_variables, 1, 1))  # shape (4, 1, 1)
 
     # Reasonable initialization for Lambda
-    Lambda_est.initialize_from_value(np.identity(1))
+    Lambda.initialize_from_value(np.identity(1))
 
     from bayespy.inference import VB
-    Q = VB(observations, latents, mu_est, Lambda_est, transition_probs, initial_state_probs)
+    Q = VB(observations, latents, transition_probs, initial_state_probs, Lambda)
 
     # use deterministic annealing to reduce sensitivity to initial conditions
     # https://www.bayespy.org/user_guide/advanced.html#deterministic-annealing
@@ -1163,17 +1171,32 @@ def compute_optimal_coupled_observer(session_data):
         Q.set_annealing(beta)
         Q.update(repeat=250, tol=1e-4)
 
-    # recover transition probabilities by dividing by row sum
+    # recover transition posteriors
+    logging.info('Coupled Bayesian Observer State Space:\n'
+                 'b_n=L & s_n=L\n'
+                 'b_n=R & s_n=L\n'
+                 'b_n=L & s_n=R\n'
+                 'b_n=R & s_n=R')
+    logging.info('True Initial block side: {}\tTrue Initial trial side: {}'.format(
+        session_data.loc[0, 'block_side'],
+        session_data.loc[0, 'trial_side']))
     initial_state_probs_posterior = Categorical(initial_state_probs).get_moments()[0]
+    logging.info(f'Coupled Bayesian Observer Initial State Posterior: \n{str(initial_state_probs_posterior)}')
     transition_probs_posterior = Categorical(transition_probs).get_moments()[0]
-    logging.info('Crippled Bayesian Observer Transition Parameters:')
-    logging.info(str(transition_probs_posterior))
+    logging.info(f'Coupled Bayesian Observer Transition Parameters Posterior: \n{str(transition_probs_posterior)}')
 
+
+
+    optimal_coupled_observer_results = dict(
+        coupled_observer_initial_state_posterior=initial_state_probs_posterior,
+        coupled_observer_transition_posterior=transition_probs_posterior,
+    )
+
+    return optimal_coupled_observer_results
 
 
 def compute_optimal_block_side_inference(session_data,
                                          env):
-
     initial_state_probs = np.array([
         0.5, 0.5])
 
@@ -1224,7 +1247,6 @@ def compute_optimal_block_side_inference(session_data,
 
 def compute_optimal_trial_side_inference(session_data,
                                          env):
-
     strength_means = np.sort(session_data.signed_trial_strength.unique())
     prob_mu = env.possible_trial_strengths_probs
 
@@ -1232,14 +1254,13 @@ def compute_optimal_trial_side_inference(session_data,
     # - 1 is for stimulus strength 0, which both stimulus sides can generate
     prob_mu_given_stim_side = np.zeros(shape=(len(strength_means), 2))
     prob_mu_given_stim_side[:len(prob_mu), 0] = prob_mu[::-1]
-    prob_mu_given_stim_side[len(prob_mu)-1:, 1] = prob_mu
+    prob_mu_given_stim_side[len(prob_mu) - 1:, 1] = prob_mu
 
     diff_obs = session_data['right_stimulus'] - session_data['left_stimulus']
 
     session_data['optimal_stimulus_posterior_right'] = np.nan
     for (session_idx, block_idx, trial_idx), trial_data in session_data.groupby([
         'session_index', 'block_index', 'trial_index']):
-
         optimal_stimulus_prior_right = trial_data['optimal_stimulus_prior_right'].iloc[0]
         optimal_stim_prior = np.array([1 - optimal_stimulus_prior_right, optimal_stimulus_prior_right])
 
@@ -1423,9 +1444,9 @@ def compute_psytrack_fit(session_data):
     return psytrack_fit_output
 
 
-def fit_reduced_dim_dynamics(session_data,
-                             pca,
-                             task_aligned_hidden_states):
+def fit_reduced_dim_model(session_data,
+                          pca,
+                          task_aligned_hidden_states):
     left_stimulus = np.expand_dims(
         session_data['left_stimulus'].values,
         axis=1)
@@ -1592,6 +1613,64 @@ def run_model_one_step(model,
     model_forward_output = model(model_input)
 
     return model_forward_output
+
+
+def run_reduced_dim_model(model_readout_norm,
+                          model_hidden_dim,
+                          envs,
+                          recurrent_matrix,
+                          input_matrix):
+
+    # create 2 dimension RNN
+    reduced_dim_model = create_model(
+        model_str='rnn',
+        model_kwargs=dict(
+            input_size=3,
+            output_size=2,
+            core_kwargs=dict(
+                num_layers=1,
+                hidden_size=2),
+            param_init='default',
+            connectivity_kwargs=dict(
+                input_mask='none',
+                recurrent_mask='none',
+                readout_mask='none',
+            )))
+
+    # overwrite RNN parameters
+    reduced_dim_model.core.bias_hh_l0 = torch.nn.Parameter(
+        torch.zeros(2))
+    reduced_dim_model.core.bias_ih_l0 = torch.nn.Parameter(
+        torch.zeros(2))
+    reduced_dim_model.readout.bias = torch.nn.Parameter(
+        torch.zeros(2))
+    reduced_dim_model.core.weight_hh_l0 = torch.nn.Parameter(
+        torch.from_numpy(recurrent_matrix))
+    reduced_dim_model.core.weight_ih_l0 = torch.nn.Parameter(
+        torch.from_numpy(input_matrix))
+
+    # calculate scaling for readout weight
+    # recall that norm grows proportional to sqrt(dimension)
+    # empirically, if choosing, 3 was best of the integers
+    scale = np.sqrt(model_hidden_dim) * model_readout_norm / np.sqrt(2)
+    reduced_dim_model.readout.weight = torch.nn.Parameter(
+        scale * torch.tensor([[-1., 0.], [1, 0.]]))
+
+    # set to double so all parameters have same type
+    reduced_dim_model.double()
+
+    # ensure parameters are fixed
+    for param in reduced_dim_model.parameters():
+        param.requires_grad = False
+
+    logging.info('Evaluating reduced model:')
+    run_reduced_dim_model_results = run_envs(model=reduced_dim_model, envs=envs)
+    # preappend reduced_dim to all keys for clarity
+    for key, value in run_reduced_dim_model_results.items():
+        run_reduced_dim_model_results['reduced_dim_' + key] = value
+        del run_reduced_dim_model_results[key]
+    run_reduced_dim_model_results['reduced_dim_model'] = reduced_dim_model
+    return run_reduced_dim_model_results
 
 
 def sample_model_states_in_state_space(projection_obj,

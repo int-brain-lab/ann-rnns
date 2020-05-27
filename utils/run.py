@@ -204,7 +204,7 @@ def load_checkpoint(train_log_dir,
     # replace some defaults
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
     env_kwargs['blocks_per_session'] = 700
-    # env_kwargs['blocks_per_session'] = 400
+    # env_kwargs['blocks_per_session'] = 600
     # env_kwargs['blocks_per_session'] = 100
     # env_kwargs['blocks_per_session'] = 40
 

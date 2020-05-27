@@ -16,6 +16,7 @@ def main():
     run_dir = 'rnn, block_side_probs=0.80, snr=2.5'  # SNR out to 2.5
     # run_dir = 'rnn, num_layers=1, hidden_size=50, param_init=default, input_mask=none, recurrent_mask=none, readout_mask=none_2020-05-20 13:10:53.203469'  # SNR = 2.5, correct loss
     # run_dir = 'rnn, block_side_probs=0.80, snr=2.5, no_training'  # totally untrained
+    # run_dir = 'rnn, block_side_probs=0.80, snr=2.5, hidden_size=2'
     train_log_dir = os.path.join('runs', run_dir)
     analyze_log_dir = os.path.join('runs', 'analyze_' + run_dir)
     tensorboard_writer = SummaryWriter(log_dir=analyze_log_dir)
