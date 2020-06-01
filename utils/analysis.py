@@ -22,6 +22,7 @@ import torch.autograd
 import torch.optim
 
 from utils.env import create_custom_worlds
+from utils.models import BayesianActor
 from utils.run import create_model, run_envs
 
 possible_stimuli = torch.DoubleTensor(
@@ -106,7 +107,7 @@ def add_analysis_data_to_hook_input(hook_input):
         pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
 
     optimal_observers_results = compute_optimal_observers(
-        env=hook_input['envs'][0],
+        envs=hook_input['envs'],
         session_data=hook_input['session_data'],
         rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_stimulus,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty)
@@ -1073,46 +1074,54 @@ def compute_model_weights_community_detection(model):
         arrows=True)
 
 
-def compute_optimal_observers(env,
+def compute_optimal_observers(envs,
                               session_data,
                               time_delay_penalty,
                               rnn_steps_before_stimulus):
 
-    compute_optimal_block_side_inference(
-        session_data=session_data,
-        env=env)
+    optimal_bayesian_actor_results = compute_optimal_bayesian_actor(
+        envs=envs)
 
-    compute_optimal_trial_side_inference(
+    compute_optimal_bayesian_observer_block_side(
         session_data=session_data,
-        env=env)
+        env=envs[0])
 
-    coupled_observer_results = compute_coupled_observer(
+    compute_optimal_bayesian_observer_trial_side(
+        session_data=session_data,
+        env=envs[0])
+
+    coupled_observer_results = compute_coupled_bayesian_observer(
         session_data=session_data)
 
-    optimal_prob_correct_after_num_obs_blockless, optimal_prob_correct_after_num_obs_blockless_by_trial_strength = \
-        compute_optimal_prob_correct_blockless(
-            session_data=session_data,
-            rnn_steps_before_stimulus=rnn_steps_before_stimulus)
-
-    optimal_reward_rate_after_num_obs_blockless, optimal_reward_rate_after_num_obs_blockless_by_trial_strength = \
-        compute_optimal_reward_rate_blockless(
-            optimal_prob_correct_after_num_obs_blockless=optimal_prob_correct_after_num_obs_blockless,
-            optimal_prob_correct_after_num_obs_blockless_by_trial_strength=optimal_prob_correct_after_num_obs_blockless_by_trial_strength,
-            time_delay_penalty=time_delay_penalty)
-
     optimal_observers_results = dict(
-        optimal_prob_correct_after_num_obs_blockless=optimal_prob_correct_after_num_obs_blockless,
-        optimal_prob_correct_after_num_obs_blockless_by_trial_strength=optimal_prob_correct_after_num_obs_blockless_by_trial_strength,
-        optimal_reward_rate_after_num_obs_blockless=optimal_reward_rate_after_num_obs_blockless,
-        optimal_reward_rate_after_num_obs_blockless_by_trial_strength=optimal_reward_rate_after_num_obs_blockless_by_trial_strength,
         coupled_observer_initial_state_posterior=coupled_observer_results['coupled_observer_initial_state_posterior'],
         coupled_observer_transition_posterior=coupled_observer_results['coupled_observer_transition_posterior'],
+        coupled_observer_latents_posterior=coupled_observer_results['coupled_observer_latents_posterior'],
+        bayesian_actor_session_data=optimal_bayesian_actor_results['bayesian_actor_session_data'],
     )
 
     return optimal_observers_results
 
 
-def compute_coupled_observer(session_data):
+def compute_optimal_bayesian_actor(envs):
+
+    bayes_actor = BayesianActor()
+    bayes_actor.reset(
+        num_sessions=len(envs),
+        block_side_probs=envs[0].block_side_probs,
+        possible_trial_strengths=envs[0].possible_trial_strengths,
+        possible_trial_strengths_probs=envs[0].possible_trial_strengths_probs,
+        trials_per_block_param=envs[0].trials_per_block_param)
+    run_envs_output = run_envs(
+        model=bayes_actor,
+        envs=envs)
+    optimal_bayesian_actor_results = dict(
+        bayesian_actor_session_data=run_envs_output['session_data'])
+    return optimal_bayesian_actor_results
+
+
+def compute_coupled_bayesian_observer(session_data):
+
     # see https://github.com/bayespy/bayespy/issues/28
     non_blank_data = session_data[(session_data.left_stimulus != 0) &
                                   (session_data.right_stimulus != 0)]
@@ -1151,7 +1160,6 @@ def compute_coupled_observer(session_data):
     diff_obs = np.expand_dims(diff_obs.values, axis=1)
     observations.observe(diff_obs)
 
-    # Random initialization to break the symmetry
     # I want to specify the means and variance of mu, but I can't figure out how
     avg_diff = np.mean(diff_obs[non_blank_data.trial_side == 1.])
     mu.u[0] = avg_diff * np.array([-1., -1., 1., 1.])[:, np.newaxis]  # shape (4, 1)
@@ -1185,18 +1193,20 @@ def compute_coupled_observer(session_data):
     transition_probs_posterior = Categorical(transition_probs).get_moments()[0]
     logging.info(f'Coupled Bayesian Observer Transition Parameters Posterior: \n{str(transition_probs_posterior)}')
 
-
+    from bayespy.inference.vmp.nodes.categorical_markov_chain import CategoricalMarkovChainToCategorical
+    latents_posterior = CategoricalMarkovChainToCategorical(latents).get_moments()[0]
 
     optimal_coupled_observer_results = dict(
         coupled_observer_initial_state_posterior=initial_state_probs_posterior,
         coupled_observer_transition_posterior=transition_probs_posterior,
+        coupled_observer_latents_posterior=latents_posterior
     )
 
     return optimal_coupled_observer_results
 
 
-def compute_optimal_block_side_inference(session_data,
-                                         env):
+def compute_optimal_bayesian_observer_block_side(session_data,
+                                                 env):
     initial_state_probs = np.array([
         0.5, 0.5])
 
@@ -1229,24 +1239,27 @@ def compute_optimal_block_side_inference(session_data,
             np.matmul(transition_probs, curr_latent_conditional_prob))
 
     # right block posterior, right block prior
-    session_data['optimal_block_posterior_right'] = np.nan
-    session_data.loc[trial_end_data.index, 'optimal_block_posterior_right'] = latent_conditional_probs[:, 1]
-    session_data['optimal_block_prior_right'] = session_data['optimal_block_posterior_right'].shift(1)
+    session_data['bayesian_observer_block_posterior_right'] = np.nan
+    session_data.loc[trial_end_data.index, 'bayesian_observer_block_posterior_right'] =\
+        latent_conditional_probs[:, 1]
+    session_data['bayesian_observer_block_prior_right'] = \
+        session_data['bayesian_observer_block_posterior_right'].shift(1)
 
     # right stimulus prior
-    session_data['optimal_stimulus_prior_right'] = np.nan
-    block_prior_indices = ~pd.isna(session_data['optimal_block_prior_right'])
-    optimal_stimulus_prior_right = np.matmul(latent_conditional_probs[:-1, :], emission_probs.T)
-    session_data.loc[block_prior_indices, 'optimal_stimulus_prior_right'] = optimal_stimulus_prior_right[:, 1]
+    session_data['bayesian_observer_stimulus_prior_right'] = np.nan
+    block_prior_indices = ~pd.isna(session_data['bayesian_observer_block_prior_right'])
+    bayesian_observer_stimulus_prior_right = np.matmul(latent_conditional_probs[:-1, :], emission_probs.T)
+    session_data.loc[block_prior_indices, 'bayesian_observer_stimulus_prior_right'] = bayesian_observer_stimulus_prior_right[:, 1]
 
     # manually specify that first block prior and first stimulus prior should be 0.5
     # before evidence, this is the correct prior
-    session_data.loc[0, 'optimal_block_prior_right'] = 0.5
-    session_data.loc[0, 'optimal_stimulus_prior_right'] = 0.5
+    session_data.loc[0, 'bayesian_observer_block_prior_right'] = 0.5
+    session_data.loc[0, 'bayesian_observer_stimulus_prior_right'] = 0.5
 
 
-def compute_optimal_trial_side_inference(session_data,
-                                         env):
+def compute_optimal_bayesian_observer_trial_side(session_data,
+                                                 env):
+
     strength_means = np.sort(session_data.signed_trial_strength.unique())
     prob_mu = env.possible_trial_strengths_probs
 
@@ -1258,11 +1271,15 @@ def compute_optimal_trial_side_inference(session_data,
 
     diff_obs = session_data['right_stimulus'] - session_data['left_stimulus']
 
-    session_data['optimal_stimulus_posterior_right'] = np.nan
+    session_data['bayesian_observer_stimulus_posterior_right'] = np.nan
     for (session_idx, block_idx, trial_idx), trial_data in session_data.groupby([
         'session_index', 'block_index', 'trial_index']):
-        optimal_stimulus_prior_right = trial_data['optimal_stimulus_prior_right'].iloc[0]
-        optimal_stim_prior = np.array([1 - optimal_stimulus_prior_right, optimal_stimulus_prior_right])
+
+        bayesian_observer_stimulus_prior_right = trial_data[
+            'bayesian_observer_stimulus_prior_right'].iloc[0]
+        optimal_stim_prior = np.array([
+            1 - bayesian_observer_stimulus_prior_right,
+            bayesian_observer_stimulus_prior_right])
 
         # P(\mu_n, s_n | history) = P(\mu_n | s_n) P(s_n | history)
         # shape = (# of possible signed stimuli strengths, num trial sides)
@@ -1320,24 +1337,25 @@ def compute_optimal_trial_side_inference(session_data,
             np.sum(optimal_stim_posterior, axis=1),
             np.ones(len(optimal_stim_posterior)))
 
-        session_data.loc[dt_indices, 'optimal_stimulus_posterior_right'] = \
+        session_data.loc[dt_indices, 'bayesian_observer_stimulus_posterior_right'] = \
             optimal_stim_posterior[:, 1]
 
     # determine ideal Bayesian observer action i.e. the MAP
-    session_data['optimal_action_side'] = \
-        2 * session_data['optimal_stimulus_posterior_right'].round() - 1
-    session_data['optimal_correct_action_taken'] = \
-        session_data['optimal_action_side'] == session_data['trial_side']
+    session_data['bayesian_observer_optimal_action_side'] = \
+        2 * session_data['bayesian_observer_stimulus_posterior_right'].round() - 1
+    session_data['bayesian_observer_correct_action_taken'] = \
+        session_data['bayesian_observer_optimal_action_side'] == session_data['trial_side']
+    session_data['bayesian_observer_reward'] = \
+        2. * session_data['bayesian_observer_correct_action_taken'] - 1.
+
     # checking equality with one nan value (e.g. 1 == nan) returns False instead nan
-    session_data.loc[pd.isna(session_data['optimal_action_side']),
-                     'optimal_correct_action_taken'] = np.nan
+    session_data.loc[pd.isna(session_data['bayesian_observer_optimal_action_side']),
+                     'bayesian_observer_correct_action_taken'] = np.nan
 
     # log fraction of correct actions
-    optimal_correct_action_taken_by_action_taken = session_data['optimal_correct_action_taken'].mean()
+    bayesian_observer_correct_action_taken_by_action_taken = session_data['bayesian_observer_correct_action_taken'].mean()
     logging.info(f'Optimal Fraction of Correct Actions Taken by Total Actions Taken: '
-                 f'{optimal_correct_action_taken_by_action_taken}')
-
-    # temp = session_data.loc[0:11, ['block_index', 'trial_index', 'rnn_step_index', 'signed_trial_strength', 'left_stimulus', 'right_stimulus', 'optimal_stimulus_prior_right', 'optimal_stimulus_posterior_right']]
+                 f'{bayesian_observer_correct_action_taken_by_action_taken}')
 
 
 def compute_optimal_prob_correct_blockless(session_data,
