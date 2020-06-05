@@ -1,6 +1,6 @@
 from itertools import product
 import matplotlib.cm as cm
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import DivergingNorm, ListedColormap
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -2359,6 +2359,7 @@ def hook_plot_state_space_effect_of_obs_along_task_aligned_vectors(hook_input):
                    f'({p_eqn}, r={np.round(r_value, 2)})'
 
         # seaborn's lead dev refuses to enable displaying the best fit parameters
+        ensure_centered_at_zero = DivergingNorm(vmin=-4., vcenter=0., vmax=4.)
         ax = sns.regplot(
             x=diff_obs,
             y=task_aligned_deltas[:, col],
@@ -2366,17 +2367,15 @@ def hook_plot_state_space_effect_of_obs_along_task_aligned_vectors(hook_input):
             # color=side_color_map['right'],
             ci=99,
             scatter_kws={'s': 1,  # marker size
-                         'color': orange_blue_cmap(task_aligned_deltas[:, col]),
+                         'color': orange_blue_cmap(ensure_centered_at_zero(task_aligned_deltas[:, col]))
                          },
             line_kws={'color': side_color_map['ideal'],
                       'label': line_eqn}
         )
-
         # this needs to go down here for some reason
         ax.set_xlabel(r'$d_{n, t} = o_{n,t}^R - o_{n,t}^L$')
 
         ax.legend()
-
     hook_input['tensorboard_writer'].add_figure(
         tag='state_space_effect_of_obs_along_task_aligned_vectors',
         figure=fig,
