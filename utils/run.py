@@ -203,10 +203,11 @@ def load_checkpoint(train_log_dir,
 
     # replace some defaults
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
-    # env_kwargs['blocks_per_session'] = 700
-    # env_kwargs['blocks_per_session'] = 600
-    # env_kwargs['blocks_per_session'] = 200
-    env_kwargs['blocks_per_session'] = 10
+    env_kwargs['blocks_per_session'] = 700
+    # env_kwargs['blocks_per_session'] = 400
+    # env_kwargs['blocks_per_session'] = 100
+    # env_kwargs['blocks_per_session'] = 40
+    # env_kwargs['blocks_per_session'] = 10
 
     return model, optimizer, global_step, env_kwargs
 
@@ -241,18 +242,28 @@ def run_envs(model,
     session_data = extract_session_data(envs=envs)
 
     avg_loss_per_dt = total_loss / (total_rnn_steps * len(envs))
+
     action_taken_by_total_trials = session_data[
         session_data.trial_end == 1.].action_taken.mean()
+    logging.info(f'# Action Trials / # Total Trials: '
+                 f'{action_taken_by_total_trials}')
+
     correct_action_taken_by_action_taken = session_data[
         session_data.action_taken == 1.].correct_action_taken.mean()
+    logging.info(f'# Correct Trials / # Action Trials: '
+                 f'{correct_action_taken_by_action_taken}')
+
     correct_action_taken_by_total_trials = session_data[
         session_data.trial_end == 1.].correct_action_taken.mean()
+    logging.info(f'# Correct Trials / # Total Trials: '
+                 f'{correct_action_taken_by_total_trials}')
+
     feedback_by_dt = session_data.reward.mean()
+
     dts_by_trial = session_data.groupby([
         'session_index', 'block_index', 'trial_index']).size().mean()
-
-    logging.info(f'Fraction of Correct Actions Taken by Total Actions Taken: '
-                 f'{correct_action_taken_by_action_taken}')
+    logging.info(f'Average steps per trial: '
+                 f'{dts_by_trial}')
 
     run_envs_output = dict(
         session_data=session_data,

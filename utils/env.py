@@ -193,7 +193,7 @@ class IBLSession(gym.Env):
                 self.session_data.at[self.current_rnn_step_within_session - 1,
                                      'action_taken'] = 1.
                 self.session_data.at[self.current_rnn_step_within_session - 1,
-                                     'correct_action_taken'] = reward == 1
+                                     'correct_action_taken'] = reward == 1.
                 self.session_data.at[self.current_rnn_step_within_session - 1,
                                      'action_side'] = -1. if left_action_prob > 0.9 else 1.
             else:
@@ -258,7 +258,7 @@ class IBLSession(gym.Env):
 
         def loss_fn(target, action_probs, is_blank_rnn_step):
             if is_blank_rnn_step:
-                loss = torch.zeros(1, dtype=torch.double, requires_grad=True)[0]
+                loss = torch.zeros(1, dtype=torch.double, requires_grad=False)[0]
             else:
                 # TODO: adding time delay penalty is currently pointless
                 loss = nlloss(target=target, input=action_probs)

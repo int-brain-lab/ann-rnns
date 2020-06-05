@@ -43,7 +43,6 @@ possible_feedback = torch.DoubleTensor(
 
 
 def add_analysis_data_to_hook_input(hook_input):
-
     # compute_behav_psychometric_comparison_between_model_and_mice(
     #     session_data=hook_input['session_data'])
 
@@ -100,11 +99,13 @@ def add_analysis_data_to_hook_input(hook_input):
         model_hidden_dim=hook_input['model'].model_kwargs['core_kwargs']['hidden_size'],
         envs=hook_input['envs'],
         recurrent_matrix=reduced_dim_model_results['A_prime'],
-        input_matrix=reduced_dim_model_results['B_prime'])
+        input_matrix=reduced_dim_model_results['B_prime'],
+        bias_vector=reduced_dim_model_results['intercept'])
 
     model_state_space_vector_fields_results = compute_model_state_space_vector_fields(
         session_data=hook_input['session_data'],
-        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
+        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
+    )
 
     optimal_observers_results = compute_optimal_observers(
         envs=hook_input['envs'],
@@ -112,8 +113,8 @@ def add_analysis_data_to_hook_input(hook_input):
         rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_stimulus,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty)
 
-    mice_behavior_data_results = load_mice_behavioral_data(
-        mouse_behavior_dir_path='data/ibl-data-may2020')
+    # mice_behavior_data_results = load_mice_behavioral_data(
+    #     mouse_behavior_dir_path='data/ibl-data-may2020')
 
     # add results to hook_input
     result_dicts = [
@@ -127,7 +128,8 @@ def add_analysis_data_to_hook_input(hook_input):
         run_reduced_dim_model_results,
         model_state_space_vector_fields_results,
         optimal_observers_results,
-        mice_behavior_data_results]
+        # mice_behavior_data_results
+    ]
     for result_dict in result_dicts:
         hook_input.update(result_dict)
 
@@ -140,6 +142,8 @@ def compute_eigenvalues(matrix):
     pca.fit(matrix)
     variance_explained = np.sort(pca.explained_variance_)[::-1]
     frac_variance_explained = np.cumsum(variance_explained / np.sum(variance_explained))
+
+    logging.info(f'Cumulative Fraction of Variance explained: {frac_variance_explained}')
 
     eigenvalues_results = dict(
         variance_explained=variance_explained,
@@ -852,6 +856,21 @@ def compute_model_hidden_states_pca(hidden_states,
     trial_readout_vector = model_readout_weights[-1, np.newaxis, :]
     trial_readout_vector /= np.linalg.norm(trial_readout_vector)
     pca_trial_readout_vector = pca.transform(trial_readout_vector)[0]
+
+    # test what fraction of length lies in 2D PCA plane
+    reconstructed_trial_readout_vector = pca.inverse_transform(
+        pca_trial_readout_vector)
+    np.linalg.norm(reconstructed_trial_readout_vector) / np.linalg.norm(trial_readout_vector.flatten())
+
+    # compute what fraction of the trial readout length is in the PCA plane
+    trial_readout_vector_component_in_pca_plane = \
+        np.dot(trial_readout_vector[0], pca.components_[0]) * pca.components_[0] + \
+        np.dot(trial_readout_vector[0], pca.components_[1]) * pca.components_[1]
+    frac_trial_readout_in_pca_plane = np.linalg.norm(trial_readout_vector_component_in_pca_plane) \
+                                      / np.linalg.norm(trial_readout_vector)
+    logging.info(f'Fraction of Stimulus Readout Length in PCA Plane: '
+                 f'{frac_trial_readout_in_pca_plane}')
+
     pca_trial_readout_vector /= np.linalg.norm(pca_trial_readout_vector)
 
     right_trial_vector_points_right = np.dot(
@@ -980,16 +999,28 @@ def compute_model_state_space_vector_fields(session_data,
 
         task_condition_index = task_condition_rows.index[task_condition_rows]
         # if too many, downsample
-        if len(task_condition_index) > 1000:
+        if len(task_condition_index) > 1500:
             task_condition_index = np.random.choice(
                 task_condition_index,
                 size=1000,
                 replace=False)
 
-        pca_hidden_states_pre = pca_hidden_states[task_condition_index - 1]
-        pca_hidden_states_post = pca_hidden_states[task_condition_index]
+        pca_hidden_states_pre = pca_hidden_states[task_condition_index - 1, :]
+        pca_hidden_states_post = pca_hidden_states[task_condition_index, :]
         displacement_pca = pca_hidden_states_post - pca_hidden_states_pre
         displacement_pca_norm = np.linalg.norm(displacement_pca, axis=1)
+
+        # TODO: remove this later
+        # was used for debugging
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots()
+        # ax.set_title(f'L: {stimulus_val[0].item()}, R: {stimulus_val[1].item()}, F: {feedback_val.item()}')
+        # ax.quiver(
+        #     pca_hidden_states_pre[:, 0],
+        #     pca_hidden_states_pre[:, 1],
+        #     displacement_pca[:, 0],
+        #     displacement_pca[:, 1])
+        # plt.show()
 
         model_state_space_vector_fields_subrows = dict(
             left_stimulus=stimulus_val[0].item(),
@@ -1078,7 +1109,6 @@ def compute_optimal_observers(envs,
                               session_data,
                               time_delay_penalty,
                               rnn_steps_before_stimulus):
-
     optimal_bayesian_actor_results = compute_optimal_bayesian_actor(
         envs=envs)
 
@@ -1090,21 +1120,42 @@ def compute_optimal_observers(envs,
         session_data=session_data,
         env=envs[0])
 
-    coupled_observer_results = compute_coupled_bayesian_observer(
-        session_data=session_data)
+    # coupled_observer_results = compute_coupled_bayesian_observer(
+    #     session_data=session_data)
+
+    # scale block posterior using OLS fit
+    X = session_data.loc[session_data['trial_end'] == 1.,
+                         'bayesian_observer_block_posterior_right'].values[:, np.newaxis]
+    X = 2. * X - 1.
+    Y = session_data.loc[session_data['trial_end'] == 1.,
+                         'magn_along_block_vector'].values[:, np.newaxis]
+    block_scaling_parameter = np.linalg.inv(X.T @ X) @ (X.T @ Y)  # shape = (1, 1)
+    block_scaling_parameter = block_scaling_parameter[0, 0]
+
+    # scale stimulus posterior using OLS fit
+    within_trial_rows = (session_data['left_stimulus'] != 0.) \
+                        & (session_data['right_stimulus'] != 0.)
+    X = session_data.loc[within_trial_rows,
+                         'bayesian_observer_stimulus_posterior_right'].values[:, np.newaxis]
+    X = 2. * X - 1.
+    Y = session_data.loc[within_trial_rows,
+                         'magn_along_trial_vector'].values[:, np.newaxis]
+    stimulus_scaling_parameter = np.linalg.inv(X.T @ X) @ (X.T @ Y)  # shape = (1, 1)
+    stimulus_scaling_parameter = stimulus_scaling_parameter[0, 0]
 
     optimal_observers_results = dict(
-        coupled_observer_initial_state_posterior=coupled_observer_results['coupled_observer_initial_state_posterior'],
-        coupled_observer_transition_posterior=coupled_observer_results['coupled_observer_transition_posterior'],
-        coupled_observer_latents_posterior=coupled_observer_results['coupled_observer_latents_posterior'],
+        # coupled_observer_initial_state_posterior=coupled_observer_results['coupled_observer_initial_state_posterior'],
+        # coupled_observer_transition_posterior=coupled_observer_results['coupled_observer_transition_posterior'],
+        # coupled_observer_latents_posterior=coupled_observer_results['coupled_observer_latents_posterior'],
         bayesian_actor_session_data=optimal_bayesian_actor_results['bayesian_actor_session_data'],
+        block_scaling_parameter=block_scaling_parameter,
+        stimulus_scaling_parameter=stimulus_scaling_parameter,
     )
 
     return optimal_observers_results
 
 
 def compute_optimal_bayesian_actor(envs):
-
     bayes_actor = BayesianActor()
     bayes_actor.reset(
         num_sessions=len(envs),
@@ -1112,6 +1163,7 @@ def compute_optimal_bayesian_actor(envs):
         possible_trial_strengths=envs[0].possible_trial_strengths,
         possible_trial_strengths_probs=envs[0].possible_trial_strengths_probs,
         trials_per_block_param=envs[0].trials_per_block_param)
+    logging.info('Running Bayesian Actor...')
     run_envs_output = run_envs(
         model=bayes_actor,
         envs=envs)
@@ -1121,7 +1173,6 @@ def compute_optimal_bayesian_actor(envs):
 
 
 def compute_coupled_bayesian_observer(session_data):
-
     # see https://github.com/bayespy/bayespy/issues/28
     non_blank_data = session_data[(session_data.left_stimulus != 0) &
                                   (session_data.right_stimulus != 0)]
@@ -1132,7 +1183,7 @@ def compute_coupled_bayesian_observer(session_data):
     num_latent_variables = 4
     initial_state_probs = Dirichlet(np.array([.4, .1, .1, .4]))
 
-    transition_probs = Dirichlet(10*np.array([
+    transition_probs = Dirichlet(10 * np.array([
         [0.98 * 0.8, 0.02 * 0.8, 0.98 * 0.8, 0.02 * 0.2],  # b_n = L, s_n = L
         [0.02 * 0.2, 0.98 * 0.2, 0.02 * 0.2, 0.98 * 0.2],  # b_n = R, s_n = L
         [0.98 * 0.2, 0.02 * 0.2, 0.98 * 0.2, 0.02 * 0.2],  # b_n = L, s_n = R
@@ -1151,7 +1202,7 @@ def compute_coupled_bayesian_observer(session_data):
         plates=(num_latent_variables,))
     Lambda = Wishart(
         1,
-        1e-6*np.identity(1))
+        1e-6 * np.identity(1))
 
     observations = Mixture(latents, Gaussian, mu, Lambda)
 
@@ -1240,7 +1291,7 @@ def compute_optimal_bayesian_observer_block_side(session_data,
 
     # right block posterior, right block prior
     session_data['bayesian_observer_block_posterior_right'] = np.nan
-    session_data.loc[trial_end_data.index, 'bayesian_observer_block_posterior_right'] =\
+    session_data.loc[trial_end_data.index, 'bayesian_observer_block_posterior_right'] = \
         latent_conditional_probs[:, 1]
     session_data['bayesian_observer_block_prior_right'] = \
         session_data['bayesian_observer_block_posterior_right'].shift(1)
@@ -1249,7 +1300,8 @@ def compute_optimal_bayesian_observer_block_side(session_data,
     session_data['bayesian_observer_stimulus_prior_right'] = np.nan
     block_prior_indices = ~pd.isna(session_data['bayesian_observer_block_prior_right'])
     bayesian_observer_stimulus_prior_right = np.matmul(latent_conditional_probs[:-1, :], emission_probs.T)
-    session_data.loc[block_prior_indices, 'bayesian_observer_stimulus_prior_right'] = bayesian_observer_stimulus_prior_right[:, 1]
+    session_data.loc[
+        block_prior_indices, 'bayesian_observer_stimulus_prior_right'] = bayesian_observer_stimulus_prior_right[:, 1]
 
     # manually specify that first block prior and first stimulus prior should be 0.5
     # before evidence, this is the correct prior
@@ -1259,7 +1311,6 @@ def compute_optimal_bayesian_observer_block_side(session_data,
 
 def compute_optimal_bayesian_observer_trial_side(session_data,
                                                  env):
-
     strength_means = np.sort(session_data.signed_trial_strength.unique())
     prob_mu = env.possible_trial_strengths_probs
 
@@ -1274,7 +1325,6 @@ def compute_optimal_bayesian_observer_trial_side(session_data,
     session_data['bayesian_observer_stimulus_posterior_right'] = np.nan
     for (session_idx, block_idx, trial_idx), trial_data in session_data.groupby([
         'session_index', 'block_index', 'trial_index']):
-
         bayesian_observer_stimulus_prior_right = trial_data[
             'bayesian_observer_stimulus_prior_right'].iloc[0]
         optimal_stim_prior = np.array([
@@ -1340,22 +1390,38 @@ def compute_optimal_bayesian_observer_trial_side(session_data,
         session_data.loc[dt_indices, 'bayesian_observer_stimulus_posterior_right'] = \
             optimal_stim_posterior[:, 1]
 
-    # determine ideal Bayesian observer action i.e. the MAP
-    session_data['bayesian_observer_optimal_action_side'] = \
+    # determine whether action was taken
+    session_data['bayesian_observer_action_taken'] = \
+        ((session_data['bayesian_observer_stimulus_posterior_right'] > 0.9) \
+         | (session_data['bayesian_observer_stimulus_posterior_right'] < 0.1)
+         ).astype(np.float)
+
+    # next, determine which action was taken (if any)
+    session_data['bayesian_observer_action_side'] = \
         2 * session_data['bayesian_observer_stimulus_posterior_right'].round() - 1
+    # keep only trials in which action would have actually been taken
+    # session_data.loc[session_data['bayesian_observer_action_taken'] == 0.,
+    #                  'bayesian_observer_action_side'] = np.nan
+
+    # next, determine whether action was correct
     session_data['bayesian_observer_correct_action_taken'] = \
-        session_data['bayesian_observer_optimal_action_side'] == session_data['trial_side']
+        session_data['bayesian_observer_action_side'] == session_data['trial_side']
     session_data['bayesian_observer_reward'] = \
         2. * session_data['bayesian_observer_correct_action_taken'] - 1.
+    # if action was not taken, set correct to 0
+    # session_data.loc[session_data['bayesian_observer_action_taken'] == 0.,
+    #                  'bayesian_observer_correct_action_taken'] = 0.
 
-    # checking equality with one nan value (e.g. 1 == nan) returns False instead nan
-    session_data.loc[pd.isna(session_data['bayesian_observer_optimal_action_side']),
-                     'bayesian_observer_correct_action_taken'] = np.nan
-
-    # log fraction of correct actions
-    bayesian_observer_correct_action_taken_by_action_taken = session_data['bayesian_observer_correct_action_taken'].mean()
-    logging.info(f'Optimal Fraction of Correct Actions Taken by Total Actions Taken: '
-                 f'{bayesian_observer_correct_action_taken_by_action_taken}')
+    # logging fraction of correct actions
+    logging.info('Bayesian Observer')
+    bayesian_observer_correct_action_taken_by_total_trials = session_data[
+        session_data.trial_end == 1.]['bayesian_observer_correct_action_taken'].mean()
+    logging.info(f'# Correct Trials / # Total Trials: '
+                 f'{bayesian_observer_correct_action_taken_by_total_trials}')
+    # bayesian_observer_action_taken_by_total_trials = session_data[
+    #     session_data.trial_end == 1.]['bayesian_observer_action_taken'].mean()
+    # logging.info(f'# Correct Trials / # Total Trials: '
+    #              f'{bayesian_observer_action_taken_by_total_trials}')
 
 
 def compute_optimal_prob_correct_blockless(session_data,
@@ -1500,35 +1566,50 @@ def fit_reduced_dim_model(session_data,
     lr = LinearRegression(fit_intercept=True, normalize=True)
     lr.fit(X=X_train, y=y_train)
     A_prime, B_prime = lr.coef_[:, :2], lr.coef_[:, 2:]
+    intercept = lr.intercept_
     r_squared = lr.score(X_test, y_test)
-    logging.info(f'R^2: {r_squared}', )
-    logging.info(f'A prime:\n{A_prime}', )
-    logging.info(f'B prime:\n{B_prime}')
+    logging.info(f'Reduced Model R^2: {r_squared}', )
+    logging.info(f'Reduced Model A prime:\n{A_prime}', )
+    logging.info(f'Reduced Model B prime:\n{B_prime}')
+    logging.info(f'Reduced Model Intercept:\n{intercept}')
 
-    task_aligned_model_states = np.zeros_like(task_aligned_hidden_states)
-    task_aligned_model_state = np.zeros(2)
+    # recursive least squares doesn't permit multivariate regression of target
+    # variable, so we need to run it twice
+    for i, variable in enumerate(['Stimulus', 'Block']):
+        logging.info(f'Recursive Least Squares for {variable}')
+        recursive_least_squares = sm.RecursiveLS(
+            y_train[:, i],
+            X_train
+        )
+        result = recursive_least_squares.fit()
+        logging.info(result.summary())
+
+    reduced_dim_model_states = np.zeros_like(task_aligned_hidden_states)
+    reduced_dim_model_state = np.zeros(2)
     inputs = X[:, 2:]
-    for i in range(len(task_aligned_model_states) - 1):
-        task_aligned_model_state = np.tanh(A_prime @ task_aligned_model_state + B_prime @ inputs[i, :])
-        task_aligned_model_states[i + 1, :] = task_aligned_model_state
+    for i in range(len(reduced_dim_model_states) - 1):
+        reduced_dim_model_state = np.tanh(A_prime @ reduced_dim_model_state
+                                          + B_prime @ inputs[i, :]
+                                          + intercept)
+        reduced_dim_model_states[i + 1, :] = reduced_dim_model_state
 
-    control_model_states = np.zeros_like(task_aligned_hidden_states)
+    rand_param_model_states = np.zeros_like(task_aligned_hidden_states)
     A_rand = np.random.normal(size=A_prime.shape)
     B_rand = np.random.normal(size=B_prime.shape)
-    control_model_state = np.zeros(2)
+    rand_param_model_state = np.zeros(2)
     inputs = X[:, 2:]
-    for i in range(len(task_aligned_model_states) - 1):
-        control_model_state = np.tanh(A_rand @ control_model_state + B_rand @ inputs[i, :])
-        control_model_states[i + 1, :] = control_model_state
+    for i in range(len(reduced_dim_model_states) - 1):
+        rand_param_model_state = np.tanh(A_rand @ rand_param_model_state + B_rand @ inputs[i, :])
+        rand_param_model_states[i + 1, :] = rand_param_model_state
 
     task_aligned_hidden_states *= max_task_aligned_hidden_states
-    task_aligned_model_states *= max_task_aligned_hidden_states
-    model_states = pca.inverse_transform(task_aligned_model_states)
+    reduced_dim_model_states *= max_task_aligned_hidden_states
+    model_states = pca.inverse_transform(reduced_dim_model_states)
 
-    trajectory_names = ['hidden_states', 'task_aligned_hidden_states', 'task_aligned_model_states',
+    trajectory_names = ['hidden_states', 'task_aligned_hidden_states', 'reduced_dim_model_states',
                         'model_states', 'control']
-    trajectories = [hidden_states, task_aligned_hidden_states, task_aligned_model_states,
-                    model_states, control_model_states]
+    trajectories = [hidden_states, task_aligned_hidden_states, reduced_dim_model_states,
+                    model_states, rand_param_model_states]
     max_delta = 20
     error_accumulation_df = pd.DataFrame(
         np.nan,
@@ -1553,10 +1634,16 @@ def fit_reduced_dim_model(session_data,
             error_accumulation_df.at[i, 'norm_var'] = norm_var
             i += 1
 
+    # drop the first for consistency with other hidden states' indexing
+    reduced_dim_model_states = reduced_dim_model_states[1:]
+
     reduced_dynamics_results = dict(
         A_prime=A_prime,
         B_prime=B_prime,
-        error_accumulation_df=error_accumulation_df)
+        intercept=intercept,
+        error_accumulation_df=error_accumulation_df,
+        reduced_dim_model_states=reduced_dim_model_states
+    )
 
     return reduced_dynamics_results
 
@@ -1637,8 +1724,8 @@ def run_reduced_dim_model(model_readout_norm,
                           model_hidden_dim,
                           envs,
                           recurrent_matrix,
-                          input_matrix):
-
+                          input_matrix,
+                          bias_vector):
     # create 2 dimension RNN
     reduced_dim_model = create_model(
         model_str='rnn',
@@ -1657,7 +1744,7 @@ def run_reduced_dim_model(model_readout_norm,
 
     # overwrite RNN parameters
     reduced_dim_model.core.bias_hh_l0 = torch.nn.Parameter(
-        torch.zeros(2))
+        torch.from_numpy(bias_vector))
     reduced_dim_model.core.bias_ih_l0 = torch.nn.Parameter(
         torch.zeros(2))
     reduced_dim_model.readout.bias = torch.nn.Parameter(
@@ -1668,9 +1755,10 @@ def run_reduced_dim_model(model_readout_norm,
         torch.from_numpy(input_matrix))
 
     # calculate scaling for readout weight
-    # recall that norm grows proportional to sqrt(dimension)
-    # empirically, if choosing, 3 was best of the integers
+    # recall that norm grows proportional to sqrt(dimension).
+    # empirically, if choosing, 3 was best of the integers from 0 to 10
     scale = np.sqrt(model_hidden_dim) * model_readout_norm / np.sqrt(2)
+    # scale = 3.
     reduced_dim_model.readout.weight = torch.nn.Parameter(
         scale * torch.tensor([[-1., 0.], [1, 0.]]))
 
@@ -1681,12 +1769,12 @@ def run_reduced_dim_model(model_readout_norm,
     for param in reduced_dim_model.parameters():
         param.requires_grad = False
 
-    logging.info('Evaluating reduced model:')
+    logging.info('Running reduced dimension model...')
     run_reduced_dim_model_results = run_envs(model=reduced_dim_model, envs=envs)
     # preappend reduced_dim to all keys for clarity
-    for key, value in run_reduced_dim_model_results.items():
-        run_reduced_dim_model_results['reduced_dim_' + key] = value
-        del run_reduced_dim_model_results[key]
+    run_reduced_dim_model_results = {
+        f'reduced_dim_{k}': v for k, v in run_reduced_dim_model_results.items()}
+    # add the actual mode
     run_reduced_dim_model_results['reduced_dim_model'] = reduced_dim_model
     return run_reduced_dim_model_results
 
