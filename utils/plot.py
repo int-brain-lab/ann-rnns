@@ -444,7 +444,7 @@ def hook_plot_behav_prob_correct_action_by_dts_within_trial(hook_input):
     trial_end_data = session_data[session_data.trial_end == 1.].copy()
 
     # subtract the blank dts to correctly count number of observations
-    trial_end_data.rnn_step_index -= hook_input['envs'][0].rnn_steps_before_stimulus
+    trial_end_data.rnn_step_index -= hook_input['envs'][0].rnn_steps_before_obs
     trial_end_data.loc[trial_end_data.rnn_step_index < 1, 'rnn_step_index'] = 0.
 
     correct_action_prob_by_num_dts = trial_end_data.groupby(
@@ -469,7 +469,7 @@ def hook_plot_behav_prob_correct_action_by_dts_within_trial(hook_input):
     ax.set_ylabel('# Correct / # Trials')
     # fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
     ax.set_ylim([-0.05, 1.05])
-    ax.set_xlim([0., 1 + hook_input['envs'][0].max_stimuli_per_trial])
+    ax.set_xlim([0., 1 + hook_input['envs'][0].max_obs_per_trial])
 
     # 0th dt is 1st observation, so add +1
     ax.plot(
@@ -515,7 +515,7 @@ def hook_plot_behav_prob_correct_action_by_dts_within_trial(hook_input):
         bayesian_trial_session_data.trial_end == 1.].copy()
 
     # subtract the blank dts to correctly count number of observations
-    bayesian_trial_end_data.rnn_step_index -= hook_input['envs'][0].rnn_steps_before_stimulus
+    bayesian_trial_end_data.rnn_step_index -= hook_input['envs'][0].rnn_steps_before_obs
     bayesian_trial_end_data.loc[bayesian_trial_end_data.rnn_step_index < 1, 'rnn_step_index'] = 0.
 
     actor_correct_action_prob_by_num_dts = bayesian_trial_end_data.groupby(
@@ -881,7 +881,7 @@ def hook_plot_behav_reward_rate(hook_input):
 
     # don't count blank dts, then add 1 because rnn step indexing starts with 0
     # for the first observation
-    reward_data['rnn_step_index'] += 1 - hook_input['envs'][0].rnn_steps_before_stimulus
+    reward_data['rnn_step_index'] += 1 - hook_input['envs'][0].rnn_steps_before_obs
 
     # step penalty
     step_penalty = hook_input['envs'][0].time_delay_penalty
@@ -946,7 +946,7 @@ def hook_plot_behav_reward_rate(hook_input):
 
     # don't count blank dts, then add 1 because rnn step indexing starts with 0
     # for the first observation
-    actor_reward_data['rnn_step_index'] += 1 - hook_input['envs'][0].rnn_steps_before_stimulus
+    actor_reward_data['rnn_step_index'] += 1 - hook_input['envs'][0].rnn_steps_before_obs
 
     # step penalty
     rnn_step_penalty = actor_reward_data['rnn_step_index'] * step_penalty
@@ -1064,7 +1064,7 @@ def hook_plot_behav_right_action_by_signed_contrast(hook_input):
 
     # rescale from [-1, -1] to [0, 1]
     bayesian_action_data['action_side'] = (1 + bayesian_action_data['action_side']) / 2
-    bayesian_action_by_signed_trial_strength = action_data.groupby(
+    bayesian_action_by_signed_trial_strength = bayesian_action_data.groupby(
         ['block_side', 'signed_trial_strength']).agg(
         {'action_side': ['mean', 'sem']})
     for block_side in bayesian_action_data['block_side'].unique():
@@ -1313,10 +1313,13 @@ def hook_plot_compare_rnn_distilled_rnn_and_two_unit_rnn(hook_input):
     ax.set_ylabel('# Correct / # Trials')
     ax.set_xlabel('Signed Stimulus Contrast')
 
-    train_log_dir = os.path.join('runs', 'rnn, block_side_probs=0.80, snr=2.5, hidden_size=2')
-    two_unit_rnn, _, _, _ = utils.run.load_checkpoint(
-        train_log_dir=train_log_dir,
-        tensorboard_writer=hook_input['tensorboard_writer'])
+    train_run_dir = os.path.join(
+        'runs', 'rnn, block_side_probs=0.80, snr=2.5, hidden_size=2')
+    two_unit_params = utils.run.create_params_analyze(
+        train_run_dir=train_run_dir)
+    two_unit_rnn, _, _ = utils.run.load_checkpoint(
+        train_run_dir=train_run_dir,
+        params=two_unit_params)
 
     two_unit_session_data = utils.run.run_envs(
         model=two_unit_rnn,

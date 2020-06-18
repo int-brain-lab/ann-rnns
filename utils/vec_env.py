@@ -4,8 +4,8 @@ import torch
 
 class VecEnv(object):
 
-    def __init__(self, make_env_fn, num_env):
-        self.envs = tuple(make_env_fn() for _ in range(num_env))
+    def __init__(self, create_env_fn, num_env):
+        self.envs = tuple(create_env_fn() for _ in range(num_env))
 
     def __len__(self):
         return len(self.envs)
@@ -32,13 +32,14 @@ class VecEnv(object):
 
     def step(self,
              actions,
+             actions_logits,
              core_hidden,
              model):
 
         assert len(self.envs) == len(actions) == len(core_hidden)
         results = []
-        for env, a, h in zip(self.envs, actions, core_hidden):
-            results.append(env.step(a, h, model))
+        for env, a, al, h in zip(self.envs, actions, actions_logits, core_hidden):
+            results.append(env.step(a, al, h, model))
         results = _flatten_list_of_dicts(results)
         return results
 

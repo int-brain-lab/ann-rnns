@@ -15,7 +15,7 @@ For a quick taste, see the 2020 April 26th's [IBL Annual Meeting Theory Working 
 presentation](documents/ibl_20200426_annual_meeting/IBL-Annual-Meeting-Theory-WG.pdf).
 
 ### Setup
-After cloning the repository, run `pip3 install -r requirements.txt` to install
+After cloning the repository, run `pip install -r requirements.txt` to install
 the project's dependencies. We used Python 3 and did not test Python 2.
 
 ### Overview

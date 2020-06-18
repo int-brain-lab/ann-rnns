@@ -41,7 +41,7 @@ def create_hook_fns_dict(hook_fns_frequencies,
     return hooks_fn_dict
 
 
-def create_hook_fns_analyze(start_grad_step):
+def create_hook_fns_analyze(checkpoint_grad_step):
     hook_fns_frequencies = [
         (0, hook_write_scalars),
         (0, utils.plot.hook_plot_task_block_inference_multiple_blocks),
@@ -100,7 +100,7 @@ def create_hook_fns_analyze(start_grad_step):
 
     analyze_hooks = create_hook_fns_dict(
         hook_fns_frequencies=hook_fns_frequencies,
-        start_grad_step=start_grad_step,
+        start_grad_step=checkpoint_grad_step,
         num_grad_steps=0)
 
     return analyze_hooks
@@ -112,7 +112,7 @@ def create_hook_fns_train(start_grad_step,
     plot_freq = 250
 
     hook_fns_frequencies = [
-        (0, hook_log_args),
+        (0, hook_log_params),
         (plot_freq, hook_print_model_progress),
         (100, hook_write_scalars),
         # (plot_freq, utils.plot.hook_plot_task_block_side_trial_side_by_trial_number),
@@ -127,7 +127,7 @@ def create_hook_fns_train(start_grad_step,
         # (plot_freq, utils.plot.hook_plot_behav_right_action_by_signed_contrast),
         # (plot_freq, utils.plot.hook_plot_behav_subj_prob_block_switch_by_signed_trial_strength),
         # (plot_freq, utils.plot.hook_plot_behav_trial_outcome_by_trial_strength),
-        (plot_freq, utils.plot.hook_plot_model_effective_circuit),
+        # (plot_freq, utils.plot.hook_plot_model_effective_circuit),
         # (plot_freq, utils.plot.hook_plot_model_hidden_unit_fraction_var_explained),
         # (plot_freq, utils.plot.hook_plot_model_weights_and_gradients),
         # (plot_freq, utils.plot.hook_plot_model_weights_community_detection),
@@ -150,13 +150,8 @@ def create_hook_fns_train(start_grad_step,
     return train_hooks
 
 
-def hook_log_args(hook_input):
+def hook_log_params(hook_input):
 
-    model_dict = dict(
-        model_str=hook_input['model'].model_str,
-        model_kwargs=hook_input['model'].model_kwargs,
-    )
-    
     env_dict = dict(
         batch_size=len(hook_input['envs']),
         block_side_probs=hook_input['envs'][0].block_side_probs,
@@ -166,23 +161,16 @@ def hook_log_args(hook_input):
         blocks_per_session=hook_input['envs'][0].blocks_per_session,
         min_trials_per_block=hook_input['envs'][0].min_trials_per_block,
         max_trials_per_block=hook_input['envs'][0].max_trials_per_block,
-        max_stimuli_per_trial=hook_input['envs'][0].max_stimuli_per_trial,
-        rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_stimulus,
+        max_stimuli_per_trial=hook_input['envs'][0].max_obs_per_trial,
+        rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_obs,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty,
-    )
-    
-    notes_dict = dict(
-        seed=hook_input['seed'],
-        optimizer=hook_input['optimizer'].defaults,
-        model=model_dict,
-        env=env_dict
     )
 
     notes_file = os.path.join(
         hook_input['tensorboard_writer'].get_logdir(),
-        'notes.json')
+        'params.json')
     with open(notes_file, "w") as f:
-        notes_str = json.dumps(notes_dict, indent=4, sort_keys=True)
+        notes_str = json.dumps(hook_input['params'], indent=4, sort_keys=True)
         print(notes_str)
         f.write(notes_str)
 

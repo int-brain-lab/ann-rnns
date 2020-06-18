@@ -71,7 +71,7 @@ class BayesianActor(object):
             core_output: Tensor of shape (batch size, num steps, core dimension)
             core_hidden: Tensor of shape (batch size, num steps, core dimension)
             linear_output: Tensor of shape (batch size, num steps, output dimension)
-            softmax_output: linear_output passed through softmax function
+            prob_output: Tensor of shape (batch size, num steps, output dimension)
         """
 
         # print('Stimulus Prior: ', self.curr_stim_posterior[0, 0])
@@ -106,7 +106,9 @@ class BayesianActor(object):
         # switch to PyTorch tensors for consistency with API
         model_output = dict(
             prob_output=torch.from_numpy(self.curr_stim_posterior),
-            core_hidden=torch.from_numpy(self.curr_block_posterior))
+            core_hidden=torch.from_numpy(self.curr_block_posterior),
+            linear_output=torch.from_numpy(np.full_like(self.curr_stim_posterior, fill_value=np.nan)),
+            core_output=torch.from_numpy(np.full_like(self.curr_block_posterior, fill_value=np.nan)))
 
         return model_output
 
@@ -203,6 +205,188 @@ class BayesianActor(object):
             self.curr_block_posterior)
 
 
+class ExponentialWeightedActor(object):
+
+    def __init__(self):
+
+        # to initialize, call self.reset()
+        self.decay = None
+        self.exp_decaying_stimulus_prior = None
+        self.curr_stim_posterior = None
+        self.mu = None
+        self.prob_mu_given_stim_side = None
+        self.start = None
+
+    def reset(self,
+              num_sessions,
+              decay,
+              possible_trial_strengths,
+              possible_trial_strengths_probs):
+
+        self.decay = decay
+        self.exp_decaying_stimulus_prior = np.full(
+            shape=(num_sessions, 1, 2),
+            fill_value=0.5)
+
+        self.curr_stim_posterior = np.full(
+            shape=(num_sessions, 1, 2),
+            fill_value=0.5)
+
+        mu = np.sort(np.concatenate(
+            [np.array(possible_trial_strengths[1:]),
+             -1. * np.array(possible_trial_strengths)]))
+        prob_mu = possible_trial_strengths_probs
+
+        # P(mu_n | s_n) as a matrix with shape (2 * number of stimulus strengths - 1, 2)
+        # - 1 is for stimulus strength 0, which both stimulus sides can generate
+        prob_mu_given_stim_side = np.zeros(shape=(len(mu), 2))
+        prob_mu_given_stim_side[:len(prob_mu), 0] = prob_mu[::-1]
+        prob_mu_given_stim_side[len(prob_mu) - 1:, 1] = prob_mu
+
+        self.mu = mu
+        self.prob_mu_given_stim_side = prob_mu_given_stim_side
+        self.start = True
+
+    def __call__(self, model_input):
+        """
+        Performs a forward pass through model.
+
+        WARNING: HAS NOT BEEN TESTED ON BATCH SIZE > 1
+
+        :param model_input: dictionary containing 4 keys:
+            stimulus: Tensor with shape (batch size, 1 step, stimulus dimension)
+            reward: Tensor with shape (batch size, 1 step)
+            info: List of len batch size. Currently unused
+            done: List of len batch size. Booleans indicating whether environment is done.
+        :return forward_output: dictionary containing 4 keys:
+            core_output: Tensor of shape (batch size, num steps, core dimension)
+            core_hidden: Tensor of shape (batch size, num steps, core dimension)
+            linear_output: Tensor of shape (batch size, num steps, output dimension)
+            prob_output: Tensor of shape (batch size, num steps, output dimension)
+        """
+
+        # print('Stimulus Prior: ', self.curr_stim_posterior[0, 0])
+        # print('Block Prior: ', self.curr_block_posterior[0, 0])
+
+        # blank dt, skip
+        if torch.all(model_input['stimulus'] == 0.) and torch.all(model_input['reward'] == 0.):
+            # print('Blank dt, skipping')
+            pass
+        # trial end, update block posterior
+        elif torch.all(model_input['stimulus'] == 0.) and torch.all(model_input['reward'] != 0.):
+            # if reward was positive, trial side is the current stimulus posterior
+            # otherwise, trial side is the opposite of the current stimulus posterior
+            chosen_action = np.round(self.curr_stim_posterior)
+            # shape = (batch size, # time steps = 1, block sides = 2)
+            correct_stim_side = np.where(
+                model_input['reward'].detach().numpy() == 1,
+                chosen_action,
+                np.abs(1 - chosen_action))
+            correct_stim_side = np.argmax(correct_stim_side, axis=2)
+            # print('Chosen action: ', chosen_action[0, 0, :])
+            # print('Correct action: ', correct_stim_side[0, 0])
+            self.update_stim_prior(correct_stim_side=correct_stim_side)
+        # within trial, update stimulus posterior
+        else:
+            self.update_stim_posterior(
+                stimulus=model_input['stimulus'].detach().numpy())
+
+        # print('Stimulus Posterior: ', self.curr_stim_posterior[0, 0])
+        # print('Block Posterior: ', self.curr_block_posterior[0, 0])
+
+        # switch to PyTorch tensors for consistency with API
+        model_output = dict(
+            prob_output=torch.from_numpy(self.curr_stim_posterior),
+            core_hidden=torch.from_numpy(self.exp_decaying_stimulus_prior),
+            linear_output=torch.from_numpy(np.full_like(self.curr_stim_posterior, fill_value=np.nan)),
+            core_output=torch.from_numpy(np.full_like(self.exp_decaying_stimulus_prior, fill_value=np.nan)))
+
+        return model_output
+
+    def update_stim_posterior(self, stimulus):
+
+        # shape: (batch size, # time steps = 1, # of observations = 1)
+        diff_obs = stimulus[:, :, 1, np.newaxis] - stimulus[:, :, 0, np.newaxis]
+        # print('Diff of Obs: ', diff_obs[0, 0, :])
+
+        # P(\mu_n, s_n | history) = P(\mu_n | s_n) P(s_n | history)
+        # shape = (batch size, # time steps = 1,
+        #          # of possible signed stimuli strengths, num stimulus sides)
+        stim_side_strength_joint_prob = np.einsum(
+            'us,bts->btus',
+            self.prob_mu_given_stim_side,
+            self.curr_stim_posterior)
+
+        # P(o_t | \mu_n, s_n) , also = P(o_t | \mu_n)
+        # shape = (batch size, # observations = 1,
+        #          # of observations = 1, # of possible signed stimuli strengths)
+        diff_obs_likelihood = scipy.stats.norm.pdf(
+            np.expand_dims(diff_obs, axis=1),
+            loc=self.mu,
+            scale=np.sqrt(2) * np.ones_like(self.mu))  # scale is std dev
+
+        # multiply likelihood by prior i.e. previous posterior
+        # P(o_{<=t}, \mu_n, s_n | history) = P(o_{<=t} | \mu_n, s_n) P(\mu_n, s_n | history)
+        # shape = (batch size, # of time steps = 1, # of observations = 1,
+        #          # of possible signed stimuli strengths, # of trial sides i.e. 2)
+        diff_obs_stim_side_strength_joint_prob = np.einsum(
+            'btou,btus->btous',  # this may be wrong
+            diff_obs_likelihood,
+            stim_side_strength_joint_prob)
+        assert len(diff_obs_stim_side_strength_joint_prob.shape) == 5
+
+        # marginalize out mu_n (strength)
+        # shape = (batch size, # of time steps = 1,
+        #          # of observations, # of trial sides i.e. 2)
+        diff_obs_stim_side_joint_prob = np.sum(
+            diff_obs_stim_side_strength_joint_prob,
+            axis=3)
+        assert len(diff_obs_stim_side_joint_prob.shape) == 4
+
+        # normalize by p(o_{<=t})
+        # shape = (num of observations, # of time steps, # of obs = 1)
+        diff_obs_marginal_prob = np.sum(
+            diff_obs_stim_side_joint_prob,
+            axis=3)
+        assert len(diff_obs_marginal_prob.shape) == 3
+
+        # shape = (num of observations, # of time steps,
+        #          # of trial sides i.e. 2)
+        curr_stim_posterior = np.divide(
+            diff_obs_stim_side_joint_prob,
+            np.expand_dims(diff_obs_marginal_prob, axis=1)  # expand to broadcast
+        )[:, :, 0, :]
+        assert len(curr_stim_posterior.shape) == 3
+        assert np.allclose(
+            np.sum(curr_stim_posterior, axis=2),
+            np.ones(shape=curr_stim_posterior.shape[:-1]))
+
+        self.curr_stim_posterior = curr_stim_posterior
+
+    def update_stim_prior(self, correct_stim_side):
+        """
+
+        :param trial_side: either 0 (left) or 1 (right)
+        :return:
+        """
+        # ensure integers to allow indexing
+        correct_stim_side = correct_stim_side.astype(np.int)
+
+        # the stimulus prior should be between [0, 1], but we want decay
+        # to fall to 0.5, not 0. So variable tranform, decay, then
+        # transform back
+
+        self.exp_decaying_stimulus_prior *= self.decay
+        # TODO: check that this slicing is correct
+        self.exp_decaying_stimulus_prior[:, :, correct_stim_side] += (1. - self.decay)
+
+        # check that this is valid probability distribution
+        assert np.all(np.isclose(self.exp_decaying_stimulus_prior.sum(axis=2), 1.))
+
+        # create prior for next stimulus
+        self.curr_stim_posterior = self.exp_decaying_stimulus_prior
+
+
 # TODO: Fix FeedForward Model
 # class FeedforwardModel(nn.Module):
 #
@@ -288,23 +472,23 @@ class BayesianActor(object):
 class RecurrentModel(nn.Module):
 
     def __init__(self,
-                 model_str,
+                 model_architecture,
                  model_kwargs):
 
         super(RecurrentModel, self).__init__()
-        self.model_str = model_str
-        assert model_str in {'rnn', 'lstm', 'gru'}
+        self.model_str = model_architecture
+        assert model_architecture in {'rnn', 'lstm', 'gru'}
         self.model_kwargs = model_kwargs
         self.input_size = model_kwargs['input_size']
         self.output_size = model_kwargs['output_size']
 
         # create and save core i.e. the recurrent operation
         self.core = self._create_core(
-            model_str=model_str,
+            model_architecture=model_architecture,
             model_kwargs=model_kwargs)
 
         masks = self._create_connectivity_masks(
-            model_str=model_str,
+            model_str=model_architecture,
             model_kwargs=model_kwargs)
         self.input_mask = masks['input_mask']
         self.recurrent_mask = masks['recurrent_mask']
@@ -333,12 +517,12 @@ class RecurrentModel(nn.Module):
         #     model=self,
         #     input_to_model=dict(stimulus=dummy_input))
 
-    def _create_core(self, model_str, model_kwargs):
-        if model_str == 'lstm':
+    def _create_core(self, model_architecture, model_kwargs):
+        if model_architecture == 'lstm':
             core_constructor = nn.LSTM
-        elif model_str == 'rnn':
+        elif model_architecture == 'rnn':
             core_constructor = nn.RNN
-        elif model_str == 'gru':
+        elif model_architecture == 'gru':
             core_constructor = nn.GRU
         else:
             raise ValueError('Unknown core string')
@@ -484,7 +668,7 @@ class RecurrentModel(nn.Module):
             core_output: Tensor of shape (batch size, num steps, core dimension)
             core_hidden: Tensor of shape (batch size, num steps, core dimension)
             linear_output: Tensor of shape (batch size, num steps, output dimension)
-            softmax_output: linear_output passed through softmax function
+            prob_output: Tensor of shape (batch size, num steps, output dimension)
         """
 
         core_input = torch.cat(
@@ -516,6 +700,9 @@ class RecurrentModel(nn.Module):
         # if probability function is sigmoid, add 1 - output to get 2D distribution
         if self.output_size == 1:
             prob_output = torch.cat([1 - prob_output, prob_output], dim=2)
+            # TODO: implement linear output i.e. inverse sigmoid
+            linear_output = None
+            raise NotImplementedError
 
         forward_output = dict(
             core_output=core_output,

@@ -21,8 +21,7 @@ import torch
 import torch.autograd
 import torch.optim
 
-from utils.env import create_custom_worlds
-from utils.models import BayesianActor
+from utils.models import BayesianActor, ExponentialWeightedActor
 from utils.run import create_model, run_envs
 
 possible_stimuli = torch.DoubleTensor(
@@ -110,7 +109,7 @@ def add_analysis_data_to_hook_input(hook_input):
     optimal_observers_results = compute_optimal_observers(
         envs=hook_input['envs'],
         session_data=hook_input['session_data'],
-        rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_stimulus,
+        rnn_steps_before_stimulus=hook_input['envs'][0].rnn_steps_before_obs,
         time_delay_penalty=hook_input['envs'][0].time_delay_penalty)
 
     # mice_behavior_data_results = load_mice_behavioral_data(
@@ -1109,7 +1108,14 @@ def compute_optimal_observers(envs,
                               session_data,
                               time_delay_penalty,
                               rnn_steps_before_stimulus):
+
     optimal_bayesian_actor_results = compute_optimal_bayesian_actor(
+        envs=envs)
+
+    optimal_bayesian_exp_weighted_actor_results = compute_optimal_bayesian_exp_weighted_actor(
+        envs=envs)
+
+    compute_optimal_bayesian_exp_weighted_actor(
         envs=envs)
 
     compute_optimal_bayesian_observer_block_side(
@@ -1147,7 +1153,10 @@ def compute_optimal_observers(envs,
         # coupled_observer_initial_state_posterior=coupled_observer_results['coupled_observer_initial_state_posterior'],
         # coupled_observer_transition_posterior=coupled_observer_results['coupled_observer_transition_posterior'],
         # coupled_observer_latents_posterior=coupled_observer_results['coupled_observer_latents_posterior'],
-        bayesian_actor_session_data=optimal_bayesian_actor_results['bayesian_actor_session_data'],
+        bayesian_actor_session_data=optimal_bayesian_actor_results[
+            'bayesian_actor_session_data'],
+        bayesian_exp_weighted_actor_results=optimal_bayesian_exp_weighted_actor_results[
+            'bayesian_exp_weighted_actor_session_data'],
         block_scaling_parameter=block_scaling_parameter,
         stimulus_scaling_parameter=stimulus_scaling_parameter,
     )
@@ -1172,7 +1181,23 @@ def compute_optimal_bayesian_actor(envs):
     return optimal_bayesian_actor_results
 
 
-def compute_coupled_bayesian_observer(session_data):
+def compute_optimal_bayesian_exp_weighted_actor(envs):
+    bayes_actor = ExponentialWeightedActor()
+    bayes_actor.reset(
+        num_sessions=len(envs),
+        decay=0.9,
+        possible_trial_strengths=envs[0].possible_trial_strengths,
+        possible_trial_strengths_probs=envs[0].possible_trial_strengths_probs)
+    logging.info('Running Bayesian Actor...')
+    run_envs_output = run_envs(
+        model=bayes_actor,
+        envs=envs)
+    optimal_bayesian_exp_weighted_actor_results = dict(
+        bayesian_exp_weighted_actor_session_data=run_envs_output['session_data'])
+    return optimal_bayesian_exp_weighted_actor_results
+
+
+def compute_optimal_bayesian_coupled_observer(session_data):
     # see https://github.com/bayespy/bayespy/issues/28
     non_blank_data = session_data[(session_data.left_stimulus != 0) &
                                   (session_data.right_stimulus != 0)]
@@ -1339,9 +1364,9 @@ def compute_optimal_bayesian_observer_trial_side(session_data,
             optimal_stim_prior)
 
         # exclude blank dts
-        dt_indices = trial_data.iloc[env.rnn_steps_before_stimulus:].index
+        dt_indices = trial_data.iloc[env.rnn_steps_before_obs:].index
         trial_diff_obs = diff_obs[trial_data.index].values[
-                         env.rnn_steps_before_stimulus:]
+                         env.rnn_steps_before_obs:]
 
         # P(o_t | \mu_n, s_n) , also = P(o_t | \mu_n)
         # shape = (num of observations, # of possible signed stimuli strengths)
@@ -1727,20 +1752,22 @@ def run_reduced_dim_model(model_readout_norm,
                           input_matrix,
                           bias_vector):
     # create 2 dimension RNN
-    reduced_dim_model = create_model(
-        model_str='rnn',
-        model_kwargs=dict(
-            input_size=3,
-            output_size=2,
-            core_kwargs=dict(
-                num_layers=1,
-                hidden_size=2),
-            param_init='default',
-            connectivity_kwargs=dict(
-                input_mask='none',
-                recurrent_mask='none',
-                readout_mask='none',
-            )))
+    distilled_model_params = {
+        'architecture': 'rnn',
+        'kwargs': {
+            'input_size': 3,
+            'output_size': 2,
+            'core_kwargs': {
+                'num_layers': 1,
+                'hidden_size': 2},
+            'param_init': 'default',
+            'connectivity_kwargs': {
+                'input_mask': 'none',
+                'recurrent_mask': 'none',
+                'readout_mask': 'none',},
+        },
+    }
+    reduced_dim_model = create_model(model_params=distilled_model_params)
 
     # overwrite RNN parameters
     reduced_dim_model.core.bias_hh_l0 = torch.nn.Parameter(

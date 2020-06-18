@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import logging
 import numpy as np
@@ -5,8 +6,12 @@ import os
 import pandas as pd
 from PIL import Image
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
-from utils.models import RecurrentModel
+import utils.env
+import utils.hooks
+import utils.models
+import utils.params
 
 
 def convert_session_data_to_ibl_changepoint_csv(session_data,
@@ -58,65 +63,94 @@ def convert_session_data_to_ibl_changepoint_csv(session_data,
         index=False)
 
 
-def create_logger(log_dir):
+def create_logger(run_dir):
     logging.basicConfig(
-        filename=os.path.join(log_dir, 'logging.txt'),
+        filename=os.path.join(run_dir, 'logging.txt'),
         level=logging.DEBUG)
     # disable matplotlib font warnings
     logging.getLogger('matplotlib.font_manager').disabled = True
 
 
-def create_model(model_str=None,
-                 model_kwargs=None):
-    # defaults
-    if model_str is None:
-        model_str = 'rnn'
-    if model_kwargs is None:
-        model_kwargs = dict(
-            input_size=3,
-            output_size=2,
-            core_kwargs=dict(
-                num_layers=1,
-                hidden_size=50),
-            param_init='default',
-            connectivity_kwargs=dict(
-                input_mask='none',
-                recurrent_mask='none',
-                readout_mask='none',
-            ))
+def create_loss_fn(loss_fn_params):
 
-    if model_str in {'rnn', 'lstm', 'gru'}:
-        model = RecurrentModel(
-            model_str=model_str,
-            model_kwargs=model_kwargs)
-    elif model_str in {'ff'}:
-        raise NotImplementedError
+    if loss_fn_params['loss_fn'] == 'mse':
+        return torch.nn.MSELoss()
+    elif loss_fn_params['loss_fn'] == 'ce':
+        return torch.nn.CrossEntropyLoss()
+    elif loss_fn_params['loss_fn'] == 'nll':
+        return torch.nn.NLLLoss()
     else:
-        raise NotImplementedError(f'Unknown core_str: {model_str}')
+        raise NotImplementedError
 
+
+def create_model(model_params):
+    if model_params['architecture'] in {'rnn', 'lstm', 'gru'}:
+        model = utils.models.RecurrentModel(
+            model_architecture=model_params['architecture'],
+            model_kwargs=model_params['kwargs'])
+    else:
+        raise NotImplementedError
     return model
 
 
 def create_optimizer(model,
-                     optimizer_str='sgd',
-                     optimizer_kwargs=None):
-    if optimizer_kwargs is None:
-        optimizer_kwargs = dict(lr=0.0001)
+                     optimizer_params):
 
-    if optimizer_str == 'sgd':
+    if optimizer_params['optimizer'] == 'sgd':
         optimizer_constructor = torch.optim.SGD
-    elif optimizer_str == 'adam':
+    elif optimizer_params['optimizer'] == 'adam':
         optimizer_constructor = torch.optim.Adam
-    elif optimizer_str == 'rmsprop':
+    elif optimizer_params['optimizer'] == 'rmsprop':
         optimizer_constructor = torch.optim.RMSprop
     else:
         raise NotImplementedError('Unknown optimizer string')
 
     optimizer = optimizer_constructor(
         params=model.parameters(),
-        **optimizer_kwargs)
+        **optimizer_params['kwargs'])
 
     return optimizer
+
+
+def create_params_analyze(train_run_dir):
+
+    # load parameters
+    with open(os.path.join(train_run_dir, 'params.json')) as params_fp:
+        params = json.load(params_fp)
+
+    # remove batch size - will use single session with large number of blocks
+    params['env']['num_sessions'] = 1
+
+    # replace some defaults
+    # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
+    # params['env']['kwargs']['blocks_per_session'] = 700
+    params['env']['kwargs']['blocks_per_session'] = 70
+    # params['env']['kwargs']['blocks_per_session'] = 10
+
+    return params
+
+
+def create_params_train():
+    params = utils.params.train_params
+    return params
+
+
+def create_run_id(params):
+
+    included_params = [
+        params['model']['architecture'],
+        'block_side_probs=' + str(params['env']['kwargs']['block_side_probs'][0][0]),
+        'max_stim_strength=' + str(params['env']['kwargs']['max_stimulus_strength']),
+    ]
+    separator = ', '
+    run_id = separator.join(str(ip) for ip in included_params)
+    return run_id
+
+
+def create_tensorboard_writer(run_dir):
+    tensorboard_writer = SummaryWriter(
+        log_dir=run_dir)
+    return tensorboard_writer
 
 
 def extract_session_data(envs):
@@ -168,11 +202,11 @@ def extract_session_data(envs):
     return session_data
 
 
-def load_checkpoint(train_log_dir,
-                    tensorboard_writer):
+def load_checkpoint(train_run_dir,
+                    params):
     # collect last checkpoint in the log directory
-    checkpoint_paths = [os.path.join(train_log_dir, file_path)
-                        for file_path in os.listdir(train_log_dir)
+    checkpoint_paths = [os.path.join(train_run_dir, file_path)
+                        for file_path in os.listdir(train_run_dir)
                         if file_path.endswith('.pt')]
 
     # select latest checkpoint path
@@ -182,34 +216,17 @@ def load_checkpoint(train_log_dir,
 
     save_dict = torch.load(checkpoint_path)
 
-    model = create_model(model_str=save_dict['model_str'],
-                         model_kwargs=save_dict['model_kwargs'])
+    model = create_model(model_params=params['model'])
     model.load_state_dict(save_dict['model_state_dict'])
 
     optimizer = create_optimizer(
         model=model,
-        optimizer_str='sgd')
+        optimizer_params=params['optimizer'])
     optimizer.load_state_dict(save_dict['optimizer_state_dict'])
 
     global_step = save_dict['global_step']
 
-    # load environment kwargs
-    with open(os.path.join(train_log_dir, 'notes.json')) as notes_fp:
-        notes = json.load(notes_fp)
-    env_kwargs = notes['env']
-
-    # remove batch size - will use single session with large number of blocks
-    del env_kwargs['batch_size']
-
-    # replace some defaults
-    # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
-    env_kwargs['blocks_per_session'] = 700
-    # env_kwargs['blocks_per_session'] = 400
-    # env_kwargs['blocks_per_session'] = 100
-    # env_kwargs['blocks_per_session'] = 40
-    # env_kwargs['blocks_per_session'] = 10
-
-    return model, optimizer, global_step, env_kwargs
+    return model, optimizer, global_step
 
 
 def run_envs(model,
@@ -230,6 +247,7 @@ def run_envs(model,
         # squeeze to remove the timestep (i.e. middle dimension) for the environment
         step_output = envs.step(
             actions=model_output['prob_output'],
+            actions_logits=model_output['linear_output'],
             core_hidden=model_output['core_hidden'],
             model=model)
 
@@ -282,10 +300,82 @@ def save_train_output(test_or_train_output):
     raise NotImplementedError
 
 
-def set_seed(seed):
+def set_seeds(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
     logging.info(f'Seed: {seed}')
+
+
+def setup_analyze(train_run_id):
+
+    run_dir = 'runs'
+    train_run_dir = os.path.join(run_dir, train_run_id)
+    analyze_run_dir = os.path.join(train_run_dir, 'analyze')
+    params = create_params_analyze(train_run_dir=train_run_dir)
+    set_seeds(seed=params['run']['seed'])
+    create_logger(run_dir=analyze_run_dir)
+    tensorboard_writer = create_tensorboard_writer(
+        run_dir=analyze_run_dir)
+    model, optimizer, checkpoint_grad_step = load_checkpoint(
+        train_run_dir=train_run_dir,
+        params=params)
+    loss_fn = create_loss_fn(
+        loss_fn_params=params['loss_fn'])
+    fn_hook_dict = utils.hooks.create_hook_fns_analyze(
+        checkpoint_grad_step=checkpoint_grad_step)
+    envs = utils.env.create_biased_choice_worlds(
+        env_params=params['env'],
+        base_loss_fn=loss_fn)
+    setup_results = dict(
+        params=params,
+        run_id=train_run_id,
+        tensorboard_writer=tensorboard_writer,
+        model=model,
+        optimizer=optimizer,
+        loss_fn=loss_fn,
+        fn_hook_dict=fn_hook_dict,
+        envs=envs,
+        checkpoint_grad_step=checkpoint_grad_step,
+    )
+    return setup_results
+
+
+def setup_train():
+
+    log_dir = 'runs'
+    os.makedirs(log_dir, exist_ok=True)
+    params = create_params_train()
+    set_seeds(seed=params['run']['seed'])
+    run_id = create_run_id(params=params)
+    run_dir = os.path.join(log_dir, run_id + '_' + str(datetime.now()))
+    create_logger(run_dir=run_dir)
+    tensorboard_writer = create_tensorboard_writer(
+        run_dir=run_dir)
+    model = create_model(
+        model_params=params['model'])
+    optimizer = create_optimizer(
+        model=model,
+        optimizer_params=params['optimizer'])
+    loss_fn = create_loss_fn(
+        loss_fn_params=params['loss_fn'])
+    fn_hook_dict = utils.hooks.create_hook_fns_train(
+        start_grad_step=params['run']['start_grad_step'],
+        num_grad_steps=params['run']['num_grad_steps'])
+    envs = utils.env.create_biased_choice_worlds(
+        env_params=params['env'],
+        base_loss_fn=loss_fn)
+
+    setup_results = dict(
+        params=params,
+        run_id=run_id,
+        tensorboard_writer=tensorboard_writer,
+        model=model,
+        optimizer=optimizer,
+        loss_fn=loss_fn,
+        fn_hook_dict=fn_hook_dict,
+        envs=envs
+    )
+    return setup_results
 
 
 def stitch_plots(log_dir):
@@ -297,7 +387,7 @@ def stitch_plots(log_dir):
 
     stitched_plots_path = os.path.join(
         log_dir,
-        log_dir.split('/')[1] + '.pdf')
+        'analyze_' + log_dir.split('/')[1] + '.pdf')
 
     images[0].save(
         stitched_plots_path,

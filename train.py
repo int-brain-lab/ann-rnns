@@ -1,63 +1,30 @@
-from datetime import datetime
 import numpy as np
-import os
-import torch
-from torch.utils.tensorboard import SummaryWriter
 
 from utils.analysis import compute_eigenvalues
-from utils.env import create_biased_choice_worlds
-from utils.hooks import create_hook_fns_train
-from utils.run import create_logger, create_model, create_optimizer, run_envs, set_seed
+import utils.run
 
 
-def main():
-    seed = 1
-    set_seed(seed=seed)
+def train():
 
-    model = create_model()
+    setup_results = utils.run.setup_train()
 
-    train_log_dir = os.path.join('runs', model.description_str + '_' + str(datetime.now()))
-    tensorboard_writer = SummaryWriter(log_dir=train_log_dir)
-    create_logger(log_dir=train_log_dir)
+    train_model(
+        model=setup_results['model'],
+        envs=setup_results['envs'],
+        optimizer=setup_results['optimizer'],
+        fn_hook_dict=setup_results['fn_hook_dict'],
+        params=setup_results['params'],
+        tensorboard_writer=setup_results['tensorboard_writer'])
 
-    optimizer = create_optimizer(
-        model=model,
-        optimizer_str='sgd',
-        optimizer_kwargs=dict(lr=0.001,
-                              momentum=0.1))
-
-    envs = create_biased_choice_worlds(
-        num_sessions=1,  # batch size
-    )
-
-    start_grad_step = 0
-    num_grad_steps = 100001
-
-    hook_fns = create_hook_fns_train(
-        start_grad_step=start_grad_step,
-        num_grad_steps=num_grad_steps)
-
-    train_model_output = train_model(
-        model=model,
-        envs=envs,
-        optimizer=optimizer,
-        hook_fns=hook_fns,
-        seed=seed,
-        tensorboard_writer=tensorboard_writer,
-        start_grad_step=start_grad_step,
-        num_grad_steps=num_grad_steps)
-
-    tensorboard_writer.close()
+    setup_results['tensorboard_writer'].close()
 
 
 def train_model(model,
                 envs,
                 optimizer,
-                hook_fns,
-                seed,
+                fn_hook_dict,
+                params,
                 tensorboard_writer,
-                start_grad_step=0,
-                num_grad_steps=150,
                 tag_prefix='train/'):
 
     # sets the model in training mode.
@@ -65,21 +32,22 @@ def train_model(model,
 
     # ensure assignment before reference
     run_envs_output = {}
-    grad_step = start_grad_step
+    start = params['run']['start_grad_step']
+    stop = start + params['run']['num_grad_steps']
 
-    for grad_step in range(start_grad_step, start_grad_step + num_grad_steps):
+    for grad_step in range(start, stop):
         if hasattr(model, 'apply_connectivity_masks'):
             model.apply_connectivity_masks()
         if hasattr(model, 'reset_core_hidden'):
             model.reset_core_hidden()
         optimizer.zero_grad()
-        run_envs_output = run_envs(
+        run_envs_output = utils.run.run_envs(
             model=model,
             envs=envs)
         run_envs_output['avg_loss_per_dt'].backward()
         optimizer.step()
 
-        if grad_step in hook_fns:
+        if grad_step in fn_hook_dict:
 
             hidden_states = np.stack(
                 [hidden_state for hidden_state in
@@ -100,14 +68,14 @@ def train_model(model,
                 optimizer=optimizer,
                 tensorboard_writer=tensorboard_writer,
                 tag_prefix=tag_prefix,
-                seed=seed)
+                params=params)
 
             eigenvalues_svd_results = compute_eigenvalues(
                 matrix=hook_input['hidden_states'].reshape(hook_input['hidden_states'].shape[0], -1))
 
             hook_input.update(eigenvalues_svd_results)
 
-            for hook_fn in hook_fns[grad_step]:
+            for hook_fn in fn_hook_dict[grad_step]:
                 hook_fn(hook_input)
 
     train_model_output = dict(
@@ -119,6 +87,4 @@ def train_model(model,
 
 
 if __name__ == '__main__':
-    log_dir = 'runs'
-    os.makedirs(log_dir, exist_ok=True)
-    main()
+    train()
