@@ -29,9 +29,6 @@ def create_block_stimuli(num_trials,
 
     trial_sides = 2*signal_sides_indices - 1
 
-    # each trial strength will either be easy or hard
-    # easy means that its signal distribution is drawn with mean 1.5
-    # hard means that its signal distribution is drawn with mean 0.5
     trial_strengths = np.random.choice(
         possible_trial_strengths,
         p=possible_trial_strengths_probs,

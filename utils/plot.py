@@ -1,6 +1,7 @@
 from itertools import product
 import matplotlib.cm as cm
 from matplotlib.colors import DivergingNorm, ListedColormap
+import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -31,6 +32,7 @@ rotation_matrix_90 = create_rotation_matrix(theta=np.pi / 2)
 side_string_map = {
     'left': -1,
     -1: 'Left',
+    0: 'Left',
     'right': 1,
     1: 'Right'
 }
@@ -3338,24 +3340,30 @@ def hook_plot_task_block_side_trial_side_by_trial_number(hook_input):
     session_data = session_data[session_data.session_index == 0]
     first_dt_of_each_trial = session_data.groupby(['block_index', 'trial_index']).first()
 
-    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3))
-    ax.set_title('Block Side, Trial Side by Trial Number')
-    ax.set_xlabel('Trial Number within Session')
-    ax.set_ylabel('P(Left)')
+    # keep only first 100 trials
+    first_dt_of_each_trial = first_dt_of_each_trial[:150]
 
-    # plot block side
-    ax.plot(np.arange(1, 1 + len(first_dt_of_each_trial)),
-            np.where(first_dt_of_each_trial.block_side == -1, 0.8, 0.2),
-            label='Block Side')
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(4, 3))
+    ax.set_xlabel('Trial Number')
+    ax.set_ylabel('Stimulus Side')
 
     # plot trial side
     ax.scatter(np.arange(1, 1 + len(first_dt_of_each_trial)),
-               np.where(first_dt_of_each_trial.trial_side == -1, 1., 0.),
+               np.where(first_dt_of_each_trial.trial_side == 1, 1., 0.),
                label='Trial Side',
-               alpha=0.8,
                s=1,
-               c='tab:orange')
-    ax.legend()
+               c=side_color_map['ideal'])
+
+    # plot block side
+    for x in np.arange(1, 1+len(first_dt_of_each_trial)):
+        ax.axvspan(
+            x,
+            x + 1,
+            facecolor=side_color_map[first_dt_of_each_trial.block_side.values[int(x-1)]],
+            alpha=0.5)
+
+    ax.set_yticklabels(['', 'Left', '', '', '', '', 'Right'])
+
     hook_input['tensorboard_writer'].add_figure(
         tag='task_block_side_trial_side_by_trial_number',
         figure=fig,

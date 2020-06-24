@@ -151,7 +151,8 @@ class IBLSession(gym.Env):
         is_blank_rnn_step = left_stimulus == 0 and right_stimulus == 0
         loss = self.loss_fn(
             target=correct_action_index.reshape((1,)).long(),
-            action_probs=model_prob_output,
+            # action_probs=model_prob_output,
+            action_probs=model_logit_output,
             is_blank_rnn_step=is_blank_rnn_step)  # * self.current_rnn_step_within_trial
         self.losses[self.current_rnn_step_within_session] = loss
 
@@ -267,7 +268,6 @@ class IBLSession(gym.Env):
             else:
                 # TODO: adding time delay penalty is currently pointless
                 loss = base_loss_fn(target=target, input=action_probs)
-                # loss = -torch.log(action_probs[0, target[0]])
             return loss
 
         return loss_fn
