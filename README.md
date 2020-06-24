@@ -25,6 +25,3 @@ TODO
 
 ### Collaboration
 If you're interested in collaborating on this project, we'd be delighted to hear from you. Email Rylan Schaeffer at rylanschaeffer@g.harvard.edu and cc Ila Fiete at fiete@mit.edu.
-
-
-Adding a line for demonstration.
