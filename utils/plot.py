@@ -1,7 +1,7 @@
 from itertools import product
 import matplotlib.cm as cm
 from matplotlib.colors import DivergingNorm, ListedColormap
-import matplotlib.patches as patches
+# import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -16,7 +16,7 @@ import utils.run
 
 # increase resolution
 plt.rcParams['figure.dpi'] = 300.
-plt.rcParams['font.size'] = 9
+plt.rcParams['font.size'] = 10
 plt.rcParams['legend.fontsize'] = 6
 
 
@@ -60,6 +60,19 @@ blues = cm.get_cmap('Blues', 128)
 oranges_blues = np.vstack((oranges_reversed(np.linspace(0, 1, 128)),
                            blues(np.linspace(0, 1, 128))))
 orange_blue_cmap = ListedColormap(oranges_blues, name='OrangeBlue')
+
+
+def run_hook_and_save_fig(hook_fn, hook_input):
+    # call hook function
+    hook_fn(hook_input)
+
+    # save figure(s) to disk
+    fn_name = str(hook_fn).split(' ')[1] + '.jpg'
+    fig = plt.gcf()  # load whatever figure was created by hook_fn
+    fig.savefig(os.path.join(hook_input['tensorboard_writer'].log_dir,
+                             fn_name),
+                bbox_inches='tight')  # removes surrounding whitespace
+    plt.close(fig)
 
 
 def hook_plot_analysis_psytrack_fit(hook_input):
@@ -711,7 +724,7 @@ def hook_plot_behav_prob_correct_action_by_zero_contrast_trial_within_block(hook
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_behav_prob_correct_by_strength_trial_block(hook_input):
+def hook_plot_behav_prob_correct_by_strength_concordant(hook_input):
 
     fig, ax = plt.subplots(figsize=(4, 3))
     # fig.suptitle('Correct Action Trials / Total Trials by Signed Stimulus Contrast')
@@ -777,7 +790,7 @@ def hook_plot_behav_prob_correct_by_strength_trial_block(hook_input):
     handles, labels = delete_redundant_legend_groups(ax=ax)
     ax.legend(handles, labels, markerscale=.1)
     hook_input['tensorboard_writer'].add_figure(
-        tag='behav_prob_correct_by_strength_trial_block',
+        tag='behav_prob_correct_by_strength_concordant',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
@@ -1309,36 +1322,24 @@ def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_compare_rnn_distilled_rnn_and_two_unit_rnn(hook_input):
+def hook_plot_compare_all_rnns_prob_correct_by_strength_concordant(hook_input):
 
     fig, ax = plt.subplots(figsize=(4, 3))
     ax.set_ylabel('# Correct / # Trials')
     ax.set_xlabel('Signed Stimulus Contrast')
 
-    train_run_dir = os.path.join(
-        'runs', 'rnn, block_side_probs=0.80, snr=2.5, hidden_size=2')
-    two_unit_params = utils.run.create_params_analyze(
-        train_run_dir=train_run_dir)
-    two_unit_rnn, _, _ = utils.run.load_checkpoint(
-        train_run_dir=train_run_dir,
-        params=two_unit_params)
-
-    two_unit_session_data = utils.run.run_envs(
-        model=two_unit_rnn,
-        envs=hook_input['envs'])['session_data']
-
     model_names = [
-        'Bayesian Actor',
-        'Trained RNN (50 Units)',
-        'Distilled RNN',
-        'Trained RNN (2 Units)']
+        'Traditionally Distilled (2 Units)',
+        'Task Trained (50 Units)',
+        'RADD RNN (2 Units)',
+        'Task Trained (2 Units)']
     session_datas = [
-        hook_input['bayesian_actor_session_data'],
+        hook_input['traditionally_distilled_session_data'],
         hook_input['session_data'],
-        hook_input['reduced_dim_session_data'],
-        two_unit_session_data
+        hook_input['radd_session_data'],
+        hook_input['two_unit_task_trained_session_data']
     ]
-    colors = ['k', 'tab:green', 'tab:purple', 'tab:pink']
+    colors = ['tab:purple', 'tab:green', 'tab:pink', 'tab:cyan']
     for model_name, session_data, color in zip(model_names, session_datas, colors):
 
         # keep only last dts in trials
@@ -1377,7 +1378,70 @@ def hook_plot_compare_rnn_distilled_rnn_and_two_unit_rnn(hook_input):
     handles, labels = delete_redundant_legend_groups(ax=ax)
     ax.legend(handles, labels, markerscale=.1)
     hook_input['tensorboard_writer'].add_figure(
-        tag='compare_rnn_distilled_rnn_and_two_unit_rnn',
+        tag='compare_all_rnns_prob_correct_by_strength_concordant',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_compare_all_rnns_prob_correct_by_trial_within_block(hook_input):
+
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.set_xlabel('Trial Within Block')
+    ax.set_ylabel('# Correct / # Trials')
+    ax.set_ylim([0.5, 1.05])
+    ax.set_xlim([0., 101.])
+    # fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    model_names = [
+        'Traditionally Distilled (2 Units)',
+        'Task Trained (50 Units)',
+        'RADD RNN (2 Units)',
+        'Task Trained (2 Units)']
+    session_datas = [
+        hook_input['traditionally_distilled_session_data'],
+        hook_input['session_data'],
+        hook_input['radd_session_data'],
+        hook_input['two_unit_task_trained_session_data']
+    ]
+    colors = ['tab:purple', 'tab:green', 'tab:pink', 'tab:cyan']
+    for model_name, session_data, color in zip(model_names, session_datas, colors):
+
+        # keep only last dts in trials
+        trial_end_data = session_data[session_data.trial_end == 1.]
+
+        # plot trial number within block (x) vs probability of correct response (y)
+        rnn_correct_by_trial_index = trial_end_data.groupby(['trial_index']).agg({
+            'correct_action_taken': ['mean', 'sem', 'size'],
+        })['correct_action_taken']
+
+        rnn_correct_by_trial_index = rnn_correct_by_trial_index[
+            rnn_correct_by_trial_index['size'] > 1.]
+
+        ax.plot(
+            1 + rnn_correct_by_trial_index.index.values,
+            rnn_correct_by_trial_index['mean'],
+            '-o',
+            markersize=1,
+            linewidth=1,
+            color=color,
+            label=model_name)
+
+        ax.fill_between(
+            x=1 + rnn_correct_by_trial_index.index.values,
+            y1=rnn_correct_by_trial_index['mean']
+               - rnn_correct_by_trial_index['sem'],
+            y2=rnn_correct_by_trial_index['mean']
+               + rnn_correct_by_trial_index['sem'],
+            alpha=0.3,
+            linewidth=0,
+            color=side_color_map['correct'])
+
+    # necessary to delete redundant legend groups
+    handles, labels = delete_redundant_legend_groups(ax=ax)
+    ax.legend(handles, labels, markerscale=.1)
+    hook_input['tensorboard_writer'].add_figure(
+        tag='compare_all_rnns_prob_correct_by_trial_within_block',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
@@ -1553,9 +1617,9 @@ def hook_plot_model_effective_circuit(hook_input):
 
     fig, axes = plt.subplots(
         nrows=1,
-        ncols=2,
-        figsize=(8, 3),
-        gridspec_kw={"width_ratios": [1, 1]})
+        ncols=3,
+        figsize=(12, 3),
+        gridspec_kw={"width_ratios": [1, 1, 1]})
     # recurrent_mask_str = hook_input['model'].model_kwargs['connectivity_kwargs']['recurrent_mask']
     # fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
@@ -1638,11 +1702,35 @@ def hook_plot_model_effective_circuit(hook_input):
     # ax.set_title('Hidden Unit - Task Correlations')
     # ax.set_ylabel('Hidden Unit Number')
 
+    # we also would like to plot the distribution of recurrent weights per cluster
+    # and between clusters
+    # first, set
+
     hook_input['tensorboard_writer'].add_figure(
         tag='model_effective_circuit',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_model_recurrent_weight_distributions(hook_input):
+
+    # TODO: finish this
+    fig, axes = plt.subplots(nrows=2, ncols=2, sharex=True, sharey=True)
+    for row in range(2):
+        for col in range(2):
+            ax = axes[row, col]
+            quadrant_indices = np.logical_and(
+                (labels == row+1)[:, np.newaxis],
+                (labels == col+1)[np.newaxis, :])
+            recurrent_quadrant_weights = recurrent_matrix[quadrant_indices]
+            sns.kdeplot(
+                recurrent_quadrant_weights,
+                color='r' if col == row else 'b',
+                ax=ax)
+            ax.axvline(recurrent_quadrant_weights.mean(), color='k')
+            ax.set_yticklabels([])
+    plt.show()
 
 
 def hook_plot_model_hidden_unit_fraction_var_explained(hook_input):
@@ -1938,7 +2026,7 @@ def hook_plot_mice_prob_correct_by_strength_trial_block(hook_input):
 #         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_reduced_dim_behav_prob_correct_by_strength_trial_block(hook_input):
+def hook_plot_radd_behav_prob_correct_by_strength_concordant(hook_input):
 
     fig, ax = plt.subplots(figsize=(4, 3))
     # fig.suptitle('Correct Action Trials / Total Trials by Signed Stimulus Contrast')
@@ -1947,7 +2035,7 @@ def hook_plot_reduced_dim_behav_prob_correct_by_strength_trial_block(hook_input)
     ax.set_xlabel('Signed Stimulus Contrast')
 
     # keep only last dts in trials
-    session_data = hook_input['reduced_dim_session_data']
+    session_data = hook_input['radd_session_data']
     trial_end_data = session_data[session_data.trial_end == 1.]
 
     for concordant, concordant_data in trial_end_data.groupby(['concordant_trial']):
@@ -2004,13 +2092,13 @@ def hook_plot_reduced_dim_behav_prob_correct_by_strength_trial_block(hook_input)
     handles, labels = delete_redundant_legend_groups(ax=ax)
     ax.legend(handles, labels, markerscale=.1)
     hook_input['tensorboard_writer'].add_figure(
-        tag='reduced_dim_behav_prob_correct_by_strength_trial_block',
+        tag='radd_behav_prob_correct_by_strength_concordant',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_reduced_dim_behav_prob_correct_by_trial_within_block(hook_input):
+def hook_plot_radd_behav_prob_correct_by_trial_within_block(hook_input):
     session_data = hook_input['session_data']
 
     # keep only last dts in trials
@@ -2111,13 +2199,13 @@ def hook_plot_reduced_dim_behav_prob_correct_by_trial_within_block(hook_input):
 
     ax.legend(markerscale=.1)
     hook_input['tensorboard_writer'].add_figure(
-        tag='reduced_dim_behav_prob_correct_by_trial_within_block',
+        tag='radd_behav_prob_correct_by_trial_within_block',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_reduced_dim_state_space_distance_decoherence(hook_input):
+def hook_plot_radd_state_space_distance_decoherence(hook_input):
     fig, ax = plt.subplots(figsize=(4, 3))
     # ax.set_title(r'Distance (L2) by Elapsed Number RNN Steps ($\Delta$)')
     jitter, total_jitter = 0.1, 0.
@@ -2129,9 +2217,9 @@ def hook_plot_reduced_dim_state_space_distance_decoherence(hook_input):
             label = r'$||h_{t+\Delta} - h_t||_2$'
         elif trajectory_name == 'task_aligned_hidden_states':
             label = r'$||z_{t+\Delta} - z_n||_2$'
-        elif trajectory_name == 'reduced_dim_model_states':
+        elif trajectory_name == 'radd_states':
             label = r'$||\hat{z}_{t+\Delta} - \hat{z}_t||_2$'
-        elif trajectory_name == 'model_states':
+        elif trajectory_name == 'inv_pca_radd_states':
             label = r'$||P^{-1} h_{n+\Delta}^{\prime} - P^{-1} h_n^{\prime}||_2$'
             # TODO: decide whether to skip this
             continue
@@ -2155,13 +2243,13 @@ def hook_plot_reduced_dim_state_space_distance_decoherence(hook_input):
     ax.set_yscale('log')
     ax.legend()
     hook_input['tensorboard_writer'].add_figure(
-        tag='reduced_dim_state_space_distance_decoherence',
+        tag='radd_state_space_distance_decoherence',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_reduced_dim_state_space_trajectories_within_block(hook_input):
+def hook_plot_radd_state_space_trajectories_within_block(hook_input):
     session_data = hook_input['session_data']
 
     # take only last dt within a trial
@@ -2170,12 +2258,12 @@ def hook_plot_reduced_dim_state_space_trajectories_within_block(hook_input):
 
     # determine correct scaling of projected RNN & reduced dim model
     X = hook_input['task_aligned_hidden_states'][:, 0, np.newaxis]
-    Y = hook_input['reduced_dim_model_states'][:, 0, np.newaxis]
+    Y = hook_input['radd_states'][:, 0, np.newaxis]
     stimulus_scaling_parameter = np.linalg.inv(X.T @ X) @ (X.T @ Y)  # shape = (1, 1)
     stimulus_scaling_parameter = stimulus_scaling_parameter[0, 0]
 
     X = hook_input['task_aligned_hidden_states'][:, 1, np.newaxis]
-    Y = hook_input['reduced_dim_model_states'][:, 1, np.newaxis]
+    Y = hook_input['radd_states'][:, 1, np.newaxis]
     block_scaling_parameter = np.linalg.inv(X.T @ X) @ (X.T @ Y)  # shape = (1, 1)
     block_scaling_parameter = block_scaling_parameter[0, 0]
 
@@ -2216,7 +2304,7 @@ def hook_plot_reduced_dim_state_space_trajectories_within_block(hook_input):
 
         block_indices = session_data_by_block.index.values
         task_aligned_hidden_states_block = hook_input['task_aligned_hidden_states'][block_indices]
-        reduced_dim_model_states_block = hook_input['reduced_dim_model_states'][block_indices]
+        radd_states_block = hook_input['radd_states'][block_indices]
         # stimuli = np.round(trial_data_by_block['stimuli'].values, 1)
         # segment_text = np.where(session_data_by_block['reward'] > 0.9, 'C', 'I')
         for i in range(len(block_indices) - 1):
@@ -2231,8 +2319,8 @@ def hook_plot_reduced_dim_state_space_trajectories_within_block(hook_input):
 
         for i in range(len(block_indices) - 1):
             ax.plot(
-                reduced_dim_model_states_block[i:i + 2, 0],
-                reduced_dim_model_states_block[i:i + 2, 1],
+                radd_states_block[i:i + 2, 0],
+                radd_states_block[i:i + 2, 1],
                 '-o',
                 label='Reduced Dim RNN',
                 color=plt.cm.jet(i / max_block_duration),
@@ -2241,13 +2329,13 @@ def hook_plot_reduced_dim_state_space_trajectories_within_block(hook_input):
         handles, labels = delete_redundant_legend_groups(ax=ax)
         ax.legend(handles, labels, markerscale=.1)
     hook_input['tensorboard_writer'].add_figure(
-        tag='reduced_dim_state_space_trajectories_within_block',
+        tag='radd_state_space_trajectories_within_block',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
-def hook_plot_reduced_dim_state_space_trajectories_within_trial(hook_input):
+def hook_plot_radd_state_space_trajectories_within_trial(hook_input):
     session_data = hook_input['session_data']
 
     num_rows, num_cols = 3, 3
@@ -2316,7 +2404,7 @@ def hook_plot_reduced_dim_state_space_trajectories_within_trial(hook_input):
                 color=plt.cm.jet(i / max_trial_duration))
 
     hook_input['tensorboard_writer'].add_figure(
-        tag='reduced_dim_state_space_trajectories_within_trial',
+        tag='radd_state_space_trajectories_within_trial',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)

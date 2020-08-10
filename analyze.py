@@ -5,6 +5,7 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.analysis import add_analysis_data_to_hook_input
+from utils.plot import run_hook_and_save_fig
 import utils.run
 
 
@@ -75,14 +76,7 @@ def analyze_model(model,
     add_analysis_data_to_hook_input(hook_input=hook_input)
 
     for hook_fn in fn_hook_dict[checkpoint_grad_step]:
-        hook_fn(hook_input)
-
-        # save figures to disk
-        fn_name = str(hook_fn).split(' ')[1] + '.jpg'
-        fig = plt.gcf()  # load whatever figure was created by hook_fn
-        fig.savefig(os.path.join(tensorboard_writer.log_dir, fn_name),
-                    bbox_inches='tight')  # removes surrounding whitespace
-        plt.close(fig)
+        run_hook_and_save_fig(hook_fn=hook_fn, hook_input=hook_input)
 
     # stitch figures together into single PDF for easy use
     utils.run.stitch_plots(log_dir=tensorboard_writer.log_dir)

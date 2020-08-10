@@ -22,7 +22,8 @@ import torch.autograd
 import torch.optim
 
 from utils.models import BayesianActor, ExponentialWeightedActor
-from utils.run import create_model, run_envs
+from utils.run import create_model, create_optimizer, create_params_analyze,\
+    load_checkpoint, run_envs
 
 possible_stimuli = torch.DoubleTensor(
     [[1.2, 0.2],
@@ -54,9 +55,14 @@ def add_analysis_data_to_hook_input(hook_input):
         hidden_states=reshaped_hidden_states,
         model_readout_weights=hook_input['model'].readout.weight.data.numpy())
 
+    # not used in NeurIPS paper, I think 2020-08-08
     hidden_states_jl_results = compute_model_hidden_states_jl(
         hidden_states=reshaped_hidden_states,
         model_readout_weights=hook_input['model'].readout.weight.data.numpy())
+
+    model_state_space_vector_fields_results = compute_model_state_space_vector_fields(
+        session_data=hook_input['session_data'],
+        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
 
     model_block_readout_vectors_results = compute_model_block_readout_vectors(
         session_data=hook_input['session_data'],
@@ -88,23 +94,30 @@ def add_analysis_data_to_hook_input(hook_input):
     eigenvalues_svd_results = compute_eigenvalues(
         matrix=reshaped_hidden_states)
 
-    reduced_dim_model_results = fit_reduced_dim_model(
+    run_two_unit_task_trained_model_results = run_two_unit_task_trained_model(
+        envs=hook_input['envs'])
+
+    distill_model_traditional_results = distill_model_traditional(
+        session_data=hook_input['session_data'],
+        analyze_dir=hook_input['tensorboard_writer'].log_dir)
+
+    run_traditionally_distilled_model_results = run_traditionally_distilled_model(
+        traditionally_distilled_model=distill_model_traditional_results['traditionally_distilled_model'],
+        envs=hook_input['envs']
+    )
+
+    distill_model_radd_results = distill_model_radd(
         session_data=hook_input['session_data'],
         pca=hidden_states_pca_results['pca'],
         task_aligned_hidden_states=model_task_aligned_states_results['task_aligned_hidden_states'])
 
-    run_reduced_dim_model_results = run_reduced_dim_model(
+    run_radd_distilled_model_results = run_radd_distilled_model(
         model_readout_norm=np.linalg.norm(hook_input['model'].readout.weight.data.numpy()),
         model_hidden_dim=hook_input['model'].model_kwargs['core_kwargs']['hidden_size'],
         envs=hook_input['envs'],
-        recurrent_matrix=reduced_dim_model_results['A_prime'],
-        input_matrix=reduced_dim_model_results['B_prime'],
-        bias_vector=reduced_dim_model_results['intercept'])
-
-    model_state_space_vector_fields_results = compute_model_state_space_vector_fields(
-        session_data=hook_input['session_data'],
-        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
-    )
+        recurrent_matrix=distill_model_radd_results['A_prime'],
+        input_matrix=distill_model_radd_results['B_prime'],
+        bias_vector=distill_model_radd_results['intercept'])
 
     optimal_observers_results = compute_optimal_observers(
         envs=hook_input['envs'],
@@ -123,8 +136,11 @@ def add_analysis_data_to_hook_input(hook_input):
         model_task_aligned_states_results,
         fixed_points_results,
         eigenvalues_svd_results,
-        reduced_dim_model_results,
-        run_reduced_dim_model_results,
+        distill_model_radd_results,
+        distill_model_traditional_results,
+        run_radd_distilled_model_results,
+        run_traditionally_distilled_model_results,
+        run_two_unit_task_trained_model_results,
         model_state_space_vector_fields_results,
         optimal_observers_results,
         # mice_behavior_data_results
@@ -1553,9 +1569,10 @@ def compute_psytrack_fit(session_data):
     return psytrack_fit_output
 
 
-def fit_reduced_dim_model(session_data,
-                          pca,
-                          task_aligned_hidden_states):
+def distill_model_radd(session_data,
+                       pca,
+                       task_aligned_hidden_states):
+
     left_stimulus = np.expand_dims(
         session_data['left_stimulus'].values,
         axis=1)
@@ -1566,6 +1583,7 @@ def fit_reduced_dim_model(session_data,
         session_data['reward'].shift(1).fillna(0),
         axis=1)
     hidden_states = np.stack(session_data['hidden_state'].values.tolist()).squeeze(1)
+
     # add a row of zeros
     task_aligned_hidden_states = np.pad(
         task_aligned_hidden_states,
@@ -1609,32 +1627,32 @@ def fit_reduced_dim_model(session_data,
         result = recursive_least_squares.fit()
         logging.info(result.summary())
 
-    reduced_dim_model_states = np.zeros_like(task_aligned_hidden_states)
-    reduced_dim_model_state = np.zeros(2)
+    radd_states = np.zeros_like(task_aligned_hidden_states)
+    radd_model_state = np.zeros(2)
     inputs = X[:, 2:]
-    for i in range(len(reduced_dim_model_states) - 1):
-        reduced_dim_model_state = np.tanh(A_prime @ reduced_dim_model_state
+    for i in range(len(radd_states) - 1):
+        radd_model_state = np.tanh(A_prime @ radd_model_state
                                           + B_prime @ inputs[i, :]
                                           + intercept)
-        reduced_dim_model_states[i + 1, :] = reduced_dim_model_state
+        radd_states[i + 1, :] = radd_model_state
 
     rand_param_model_states = np.zeros_like(task_aligned_hidden_states)
     A_rand = np.random.normal(size=A_prime.shape)
     B_rand = np.random.normal(size=B_prime.shape)
     rand_param_model_state = np.zeros(2)
     inputs = X[:, 2:]
-    for i in range(len(reduced_dim_model_states) - 1):
+    for i in range(len(radd_states) - 1):
         rand_param_model_state = np.tanh(A_rand @ rand_param_model_state + B_rand @ inputs[i, :])
         rand_param_model_states[i + 1, :] = rand_param_model_state
 
     task_aligned_hidden_states *= max_task_aligned_hidden_states
-    reduced_dim_model_states *= max_task_aligned_hidden_states
-    model_states = pca.inverse_transform(reduced_dim_model_states)
+    radd_states *= max_task_aligned_hidden_states
+    inv_pca_radd_states = pca.inverse_transform(radd_states)
 
-    trajectory_names = ['hidden_states', 'task_aligned_hidden_states', 'reduced_dim_model_states',
-                        'model_states', 'control']
-    trajectories = [hidden_states, task_aligned_hidden_states, reduced_dim_model_states,
-                    model_states, rand_param_model_states]
+    trajectory_names = ['hidden_states', 'task_aligned_hidden_states', 'radd_states',
+                        'inv_pca_radd_states', 'control']
+    trajectories = [hidden_states, task_aligned_hidden_states, radd_states,
+                    inv_pca_radd_states, rand_param_model_states]
     max_delta = 20
     error_accumulation_df = pd.DataFrame(
         np.nan,
@@ -1660,17 +1678,141 @@ def fit_reduced_dim_model(session_data,
             i += 1
 
     # drop the first for consistency with other hidden states' indexing
-    reduced_dim_model_states = reduced_dim_model_states[1:]
+    # first is 0 anyways
+    radd_states = radd_states[1:]
 
-    reduced_dynamics_results = dict(
+    radd_distilled_model_results = dict(
         A_prime=A_prime,
         B_prime=B_prime,
         intercept=intercept,
         error_accumulation_df=error_accumulation_df,
-        reduced_dim_model_states=reduced_dim_model_states
+        radd_states=radd_states
     )
 
-    return reduced_dynamics_results
+    return radd_distilled_model_results
+
+
+def distill_model_traditional(session_data,
+                              analyze_dir,
+                              num_gradient_steps=15000):
+
+    # create 2 dimension RNN
+    traditional_distilled_model_params = {
+        'architecture': 'rnn',
+        'kwargs': {
+            'input_size': 3,
+            'output_size': 2,
+            'core_kwargs': {
+                'num_layers': 1,
+                'hidden_size': 2},
+            'param_init': 'default',
+            'connectivity_kwargs': {
+                'input_mask': 'none',
+                'recurrent_mask': 'none',
+                'readout_mask': 'none', },
+        },
+    }
+
+    traditionally_distilled_model = create_model(
+        model_params=traditional_distilled_model_params)
+
+    traditionally_distilled_checkpoint_path = os.path.join(
+        analyze_dir,
+        f'checkpoint_traditionally_distilled_{num_gradient_steps}.pt')
+
+    # if already exists, load from disk
+    if os.path.isfile(traditionally_distilled_checkpoint_path):
+        save_dict = torch.load(traditionally_distilled_checkpoint_path)
+        traditionally_distilled_model.load_state_dict(save_dict['model_state_dict'])
+        training_losses = save_dict['training_losses']
+
+    # otherwise, train and save to disk
+    else:
+
+        assert isinstance(num_gradient_steps, int)
+        assert num_gradient_steps > 0
+
+        traditional_distilled_optimizer_params = {
+            'optimizer': 'sgd',
+            'kwargs': {
+                'lr': 1e-3,
+                'momentum': 0.1,
+                'nesterov': False,
+                'weight_decay': 0,
+            },
+            'description': 'Vanilla SGD'
+        }
+        traditional_distilled_optimizer = create_optimizer(
+            model=traditionally_distilled_model,
+            optimizer_params=traditional_distilled_optimizer_params)
+
+        # shape: (batch size = 1, sequence length, 2)
+        stimuli = torch.unsqueeze(torch.from_numpy(
+            np.stack([
+                session_data['left_stimulus'],
+                session_data['right_stimulus']],
+                axis=1)),
+            dim=0).double()
+
+        # shape (batch size =1, sequence length)
+        rewards = torch.unsqueeze(torch.from_numpy(
+            session_data['reward'].shift(1).fillna(0).values),
+            dim=0).double()
+
+        model_input = dict(
+            stimulus=stimuli,
+            reward=rewards,
+        )
+
+        targets = torch.unsqueeze(torch.from_numpy(
+            np.stack([
+                session_data['left_action_prob'],
+                session_data['right_action_prob']],
+                axis=1)).double(),
+            dim=0).double()
+
+        # https://discuss.pytorch.org/t/soft-cross-entropy-loss-tf-has-it-does-pytorch-have-it/69501/2
+        # https://discuss.pytorch.org/t/catrogircal-cross-entropy-with-soft-classes/50871/2
+        # PyTorch NLLLoss and CrossEntropyLoss require targets to be one-hot encoded.
+        # This doesn't work in the distillation setting, so we implement ourselves the so-called
+        # "soft" cross entropy loss
+        def soft_cross_entropy(predicted, target):
+            # both have input shape (batch size, time steps, # of possible actions)
+            cross_entropy = - torch.sum(target * torch.log(predicted), dim=2)
+            return torch.mean(cross_entropy)
+
+        logging.info(f'Training traditionally distilled model for {num_gradient_steps} steps...')
+        training_losses = np.zeros(num_gradient_steps, dtype=np.float16)
+        for grad_step in range(num_gradient_steps):
+            if hasattr(traditionally_distilled_model, 'reset_core_hidden'):
+                traditionally_distilled_model.reset_core_hidden()
+            traditional_distilled_optimizer.zero_grad()
+            traditional_distilled_model_outputs = traditionally_distilled_model(model_input)
+            loss = soft_cross_entropy(
+                target=targets,
+                predicted=traditional_distilled_model_outputs['prob_output'])
+            loss.backward()
+            if grad_step % 100 == 0:
+                logging.info(f'{grad_step}: {loss.item()}')
+            training_losses[grad_step] = loss.item()
+            traditional_distilled_optimizer.step()
+
+        # save model so we don't have to wait next time
+        save_dict = dict(
+            model_state_dict=traditionally_distilled_model.state_dict(),
+            global_step=grad_step,
+            training_losses=training_losses)
+
+        torch.save(
+            obj=save_dict,
+            f=traditionally_distilled_checkpoint_path)
+
+    distill_model_traditional_results = dict(
+        traditionally_distilled_model=traditionally_distilled_model,
+        traditionally_distilled_training_losses=training_losses
+    )
+
+    return distill_model_traditional_results
 
 
 def load_mice_behavioral_data(mouse_behavior_dir_path):
@@ -1745,12 +1887,13 @@ def run_model_one_step(model,
     return model_forward_output
 
 
-def run_reduced_dim_model(model_readout_norm,
-                          model_hidden_dim,
-                          envs,
-                          recurrent_matrix,
-                          input_matrix,
-                          bias_vector):
+def run_radd_distilled_model(model_readout_norm,
+                             model_hidden_dim,
+                             envs,
+                             recurrent_matrix,
+                             input_matrix,
+                             bias_vector):
+
     # create 2 dimension RNN
     distilled_model_params = {
         'architecture': 'rnn',
@@ -1767,18 +1910,18 @@ def run_reduced_dim_model(model_readout_norm,
                 'readout_mask': 'none',},
         },
     }
-    reduced_dim_model = create_model(model_params=distilled_model_params)
+    radd_model = create_model(model_params=distilled_model_params)
 
     # overwrite RNN parameters
-    reduced_dim_model.core.bias_hh_l0 = torch.nn.Parameter(
+    radd_model.core.bias_hh_l0 = torch.nn.Parameter(
         torch.from_numpy(bias_vector))
-    reduced_dim_model.core.bias_ih_l0 = torch.nn.Parameter(
+    radd_model.core.bias_ih_l0 = torch.nn.Parameter(
         torch.zeros(2))
-    reduced_dim_model.readout.bias = torch.nn.Parameter(
+    radd_model.readout.bias = torch.nn.Parameter(
         torch.zeros(2))
-    reduced_dim_model.core.weight_hh_l0 = torch.nn.Parameter(
+    radd_model.core.weight_hh_l0 = torch.nn.Parameter(
         torch.from_numpy(recurrent_matrix))
-    reduced_dim_model.core.weight_ih_l0 = torch.nn.Parameter(
+    radd_model.core.weight_ih_l0 = torch.nn.Parameter(
         torch.from_numpy(input_matrix))
 
     # calculate scaling for readout weight
@@ -1786,24 +1929,60 @@ def run_reduced_dim_model(model_readout_norm,
     # empirically, if choosing, 3 was best of the integers from 0 to 10
     scale = np.sqrt(model_hidden_dim) * model_readout_norm / np.sqrt(2)
     # scale = 3.
-    reduced_dim_model.readout.weight = torch.nn.Parameter(
+    radd_model.readout.weight = torch.nn.Parameter(
         scale * torch.tensor([[-1., 0.], [1, 0.]]))
 
     # set to double so all parameters have same type
-    reduced_dim_model.double()
+    radd_model.double()
 
     # ensure parameters are fixed
-    for param in reduced_dim_model.parameters():
+    for param in radd_model.parameters():
         param.requires_grad = False
 
-    logging.info('Running reduced dimension model...')
-    run_reduced_dim_model_results = run_envs(model=reduced_dim_model, envs=envs)
+    logging.info('Running RADD distilled model...')
+    run_reduced_dim_model_results = run_envs(model=radd_model, envs=envs)
     # preappend reduced_dim to all keys for clarity
     run_reduced_dim_model_results = {
-        f'reduced_dim_{k}': v for k, v in run_reduced_dim_model_results.items()}
+        f'radd_{k}': v for k, v in run_reduced_dim_model_results.items()}
     # add the actual mode
-    run_reduced_dim_model_results['reduced_dim_model'] = reduced_dim_model
+    run_reduced_dim_model_results['radd_model'] = radd_model
     return run_reduced_dim_model_results
+
+
+def run_traditionally_distilled_model(traditionally_distilled_model,
+                                      envs):
+
+    logging.info('Running traditionally distilled model...')
+    run_traditionally_distilled_model_results = run_envs(
+        model=traditionally_distilled_model,
+        envs=envs)
+    # preappend reduced_dim to all keys for clarity
+    run_traditionally_distilled_model_results = {
+        f'traditionally_distilled_{k}': v for k, v in run_traditionally_distilled_model_results.items()}
+    # add the actual model
+    return run_traditionally_distilled_model_results
+
+
+def run_two_unit_task_trained_model(envs):
+
+    train_run_dir = os.path.join(
+        'runs', 'rnn, block_side_probs=0.80, snr=2.5, hidden_size=2')
+    two_unit_params = create_params_analyze(
+        train_run_dir=train_run_dir)
+    two_unit_tasked_trained_rnn, _, _ = load_checkpoint(
+        train_run_dir=train_run_dir,
+        params=two_unit_params)
+
+    two_unit_session_data = run_envs(
+        model=two_unit_tasked_trained_rnn,
+        envs=envs)['session_data']
+
+    run_two_unit_task_trained_model_results = dict(
+        two_unit_task_trained=two_unit_tasked_trained_rnn,
+        two_unit_task_trained_session_data=two_unit_session_data
+    )
+
+    return run_two_unit_task_trained_model_results
 
 
 def sample_model_states_in_state_space(projection_obj,

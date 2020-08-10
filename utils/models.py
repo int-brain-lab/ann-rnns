@@ -600,7 +600,7 @@ class RecurrentModel(nn.Module):
 
         core_input = torch.cat(
             [model_input['stimulus'],
-             model_input['reward'].reshape(-1, 1, 1)],
+             torch.unsqueeze(model_input['reward'], dim=2)],  # TODO: check that this change didn't break anything
             dim=2)
 
         core_output, self.core_hidden = self.core(

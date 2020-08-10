@@ -28,11 +28,20 @@ send them all to someone simultaneously.
 
 If you want to run on a SLURM cluster, use the `ann-rnn.sh` bash script.
 
-### Notes
+### Notes and Warnings
+
+- If you want to run analyze, depending on how many blocks you want to average over,
+the run may take a very long time. This is likely due to fitting the traditionally 
+distilled model (see `utils.analysis.distill_model_traditional()`). However, the model
+will be written to disk so that subsequent runs will take less time.
 
 - Some of the variable names are inconsistent throughout the repo
  because our understanding evolved as the project progressed. Sadly, I haven't
  had time to rename variables for reader clarity.
+
+- There are also remnants of directions we never explored. For instance, we considered
+playing with different parameter initializations and connectivity constraints (masks)
+but these were never actually used. 
 
 ### Questions? Concerns? Collaborations?
 
