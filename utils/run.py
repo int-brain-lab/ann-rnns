@@ -5,6 +5,7 @@ import numpy as np
 import os
 import pandas as pd
 from PIL import Image
+import sys
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
@@ -64,11 +65,20 @@ def convert_session_data_to_ibl_changepoint_csv(session_data,
 
 
 def create_logger(run_dir):
+
     logging.basicConfig(
-        filename=os.path.join(run_dir, 'logging.txt'),
+        filename=os.path.join(run_dir, 'analyze.log'),
         level=logging.DEBUG)
+
+    logging.info('Logger created successfully')
+
+    # also log to std out
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    logging.getLogger().addHandler(console_handler)
+
     # disable matplotlib font warnings
-    logging.getLogger('matplotlib.font_manager').disabled = True
+    # logging.getLogger('matplotlib.font_manager').disabled = True
 
 
 def create_loss_fn(loss_fn_params):
@@ -123,8 +133,8 @@ def create_params_analyze(train_run_dir):
 
     # replace some defaults
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
-    # params['env']['kwargs']['blocks_per_session'] = 700
-    params['env']['kwargs']['blocks_per_session'] = 70
+    params['env']['kwargs']['blocks_per_session'] = 1000
+    # params['env']['kwargs']['blocks_per_session'] = 100
     # params['env']['kwargs']['blocks_per_session'] = 10
 
     return params
@@ -311,9 +321,9 @@ def setup_analyze(train_run_id):
     run_dir = 'runs'
     train_run_dir = os.path.join(run_dir, train_run_id)
     analyze_run_dir = os.path.join(train_run_dir, 'analyze')
+    create_logger(run_dir=analyze_run_dir)
     params = create_params_analyze(train_run_dir=train_run_dir)
     set_seeds(seed=params['run']['seed'])
-    create_logger(run_dir=analyze_run_dir)
     tensorboard_writer = create_tensorboard_writer(
         run_dir=analyze_run_dir)
     model, optimizer, checkpoint_grad_step = load_checkpoint(
@@ -329,6 +339,7 @@ def setup_analyze(train_run_id):
     setup_results = dict(
         params=params,
         run_id=train_run_id,
+        run_dir=run_dir,
         tensorboard_writer=tensorboard_writer,
         model=model,
         optimizer=optimizer,
@@ -345,10 +356,10 @@ def setup_train():
     log_dir = 'runs'
     os.makedirs(log_dir, exist_ok=True)
     params = create_params_train()
-    set_seeds(seed=params['run']['seed'])
     run_id = create_run_id(params=params)
     run_dir = os.path.join(log_dir, run_id + '_' + str(datetime.now()))
     create_logger(run_dir=run_dir)
+    set_seeds(seed=params['run']['seed'])
     tensorboard_writer = create_tensorboard_writer(
         run_dir=run_dir)
     model = create_model(
@@ -368,6 +379,7 @@ def setup_train():
     setup_results = dict(
         params=params,
         run_id=run_id,
+        run_dir=run_dir,
         tensorboard_writer=tensorboard_writer,
         model=model,
         optimizer=optimizer,
