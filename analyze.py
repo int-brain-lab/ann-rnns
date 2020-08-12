@@ -12,7 +12,7 @@ import utils.run
 def analyze():
 
     train_run_id = 'rnn, block_side_probs=0.80, snr=2.5'
-    # train_run_id = 'rnn_0.8_2.5_2020-06-16 10:38:46.880866'
+    # train_run_id = 'rnn, max_stim_strength=2.5, hidden_size=50_2020-08-11 14:07:09.981836'
     setup_results = utils.run.setup_analyze(
         train_run_id=train_run_id)
 
@@ -42,6 +42,7 @@ def analyze_model(model,
                   checkpoint_grad_step,
                   tag_prefix='analyze/'):
 
+    logging.info('Running high dimensional, task-trained model...')
     run_envs_output = utils.run.run_envs(
         model=model,
         envs=envs)
