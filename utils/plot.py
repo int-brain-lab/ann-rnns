@@ -37,18 +37,19 @@ side_string_map = {
     1: 'Right'
 }
 
-# https://github.com/matplotlib/matplotlib/blob/b34895dbfaba1293ea2ab8c35d1b2df5a246054c/lib/matplotlib/_color_data.py
+# attempt to be color-deficient friendly
+# https://gist.github.com/thriveth/8560036
 side_color_map = {
-    'left': 'tab:orange',
-    side_string_map['left']: 'tab:orange',
-    'right': 'tab:blue',
-    side_string_map['right']: 'tab:blue',
-    'neutral': 'tab:gray',
-    'correct': 'tab:green',  # #2ca02c
-    'incorrect': 'tab:red',  # #d62728
-    'timeout': 'tab:purple',
-    'ideal': 'k',
-    'ideal_correct': '#0d300d',
+    'left': '#ff7f00',  # orange
+    side_string_map['left']: '#ff7f00',  # orange
+    'right': '#377eb8',  # blue
+    side_string_map['right']: '#377eb8',  # blue
+    'neutral': '#999999',  # grey
+    'correct': '#4daf4a',  # green
+    'incorrect': '#e41a1c',  # red
+    'timeout': '#984ea3',  # purple
+    'ideal': 'k',  # black
+    'ideal_correct': '#0d300d',  # dark green
     'ideal_incorrect': '#6b1314',
     'stim_readout': '#3f3f3f',  # equivalent to
     'block_readout': '#7f7f7f'  # equivalent to tab grey
@@ -284,52 +285,52 @@ def hook_plot_behav_bayesian_dts_per_trial_by_strength_correct_concordant(hook_i
     # fig.suptitle('dts/Trial by Signed Stimulus Contrast')
     # fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
-    session_data = hook_input['session_data']
-    dts_and_stimuli_strength_by_trial_df = session_data.groupby([
-        'session_index', 'block_index', 'trial_index']).agg({
-        'trial_strength': 'first',
-        'signed_trial_strength': 'first',
-        'rnn_step_index': 'size',
-        'correct_action_taken': 'last',
-        'concordant_trial': 'first'})
-
-    for (correct_action_taken, concordant_trial), dts_and_stimuli_strength_subset in \
-            dts_and_stimuli_strength_by_trial_df.groupby([
-                'correct_action_taken', 'concordant_trial']):
-
-        if correct_action_taken == 1.:
-            label = 'Correct'
-            color = side_color_map['correct']
-        else:
-            label = 'Incorrect'
-            color = side_color_map['incorrect']
-
-        if concordant_trial:
-            label += ', Concordant Trials'
-            style = '-o'
-        else:
-            label += ', Discordant Trials'
-            style = '--o'
-
-        avg_dts_per_trial = dts_and_stimuli_strength_subset.groupby(
-            ['signed_trial_strength']).rnn_step_index.mean()
-        sem_dts_per_trial = dts_and_stimuli_strength_subset.groupby(
-            ['signed_trial_strength']).rnn_step_index.sem()
-        stimuli_strengths = avg_dts_per_trial.index.values
-
-        ax.plot(
-            stimuli_strengths,
-            avg_dts_per_trial,
-            style,
-            color=color,
-            markersize=2)
-        ax.fill_between(
-            x=stimuli_strengths,
-            y1=avg_dts_per_trial - sem_dts_per_trial,
-            y2=avg_dts_per_trial + sem_dts_per_trial,
-            alpha=0.3,
-            linewidth=0,
-            color=color)
+    # session_data = hook_input['session_data']
+    # dts_and_stimuli_strength_by_trial_df = session_data.groupby([
+    #     'session_index', 'block_index', 'trial_index']).agg({
+    #     'trial_strength': 'first',
+    #     'signed_trial_strength': 'first',
+    #     'rnn_step_index': 'size',
+    #     'correct_action_taken': 'last',
+    #     'concordant_trial': 'first'})
+    #
+    # for (correct_action_taken, concordant_trial), dts_and_stimuli_strength_subset in \
+    #         dts_and_stimuli_strength_by_trial_df.groupby([
+    #             'correct_action_taken', 'concordant_trial']):
+    #
+    #     if correct_action_taken == 1.:
+    #         label = 'Correct'
+    #         color = side_color_map['correct']
+    #     else:
+    #         label = 'Incorrect'
+    #         color = side_color_map['incorrect']
+    #
+    #     if concordant_trial:
+    #         label += ', Concordant Trials'
+    #         style = '-o'
+    #     else:
+    #         label += ', Discordant Trials'
+    #         style = '--o'
+    #
+    #     avg_dts_per_trial = dts_and_stimuli_strength_subset.groupby(
+    #         ['signed_trial_strength']).rnn_step_index.mean()
+    #     sem_dts_per_trial = dts_and_stimuli_strength_subset.groupby(
+    #         ['signed_trial_strength']).rnn_step_index.sem()
+    #     stimuli_strengths = avg_dts_per_trial.index.values
+    #
+    #     ax.plot(
+    #         stimuli_strengths,
+    #         avg_dts_per_trial,
+    #         style,
+    #         color=color,
+    #         markersize=2)
+    #     ax.fill_between(
+    #         x=stimuli_strengths,
+    #         y1=avg_dts_per_trial - sem_dts_per_trial,
+    #         y2=avg_dts_per_trial + sem_dts_per_trial,
+    #         alpha=0.3,
+    #         linewidth=0,
+    #         color=color)
 
     bayesian_session_data = hook_input['bayesian_actor_session_data']
     dts_and_stimuli_strength_by_trial_df = bayesian_session_data.groupby([
@@ -670,6 +671,115 @@ def hook_plot_behav_prob_correct_action_by_trial_within_block(hook_input):
     ax.legend(markerscale=.1)
     hook_input['tensorboard_writer'].add_figure(
         tag='behav_prob_correct_action_by_trial_within_block',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_behav_prob_correct_action_by_trial_within_block_zero_contrast(hook_input):
+    session_data = hook_input['session_data']
+
+    # keep only zero contrast, last dts in trials
+    zero_contrast_trial_end_data = session_data[
+        (session_data.trial_end == 1.) & (session_data.trial_strength == 0.)].copy()
+
+    # plot trial number within block (x) vs probability of correct response (y)
+    correct_and_block_posterior_by_trial_index = zero_contrast_trial_end_data.groupby(['trial_index']).agg({
+        'correct_action_taken': ['mean', 'sem', 'size'],
+        'bayesian_observer_correct_action_taken': ['mean', 'sem', 'size'],
+    })
+
+    # drop NaN SEM rows
+    rnn_correct_by_trial_index = correct_and_block_posterior_by_trial_index[
+        'correct_action_taken']
+    observer_correct_by_trial_index = correct_and_block_posterior_by_trial_index[
+        'bayesian_observer_correct_action_taken']
+    rnn_correct_by_trial_index = rnn_correct_by_trial_index[
+        rnn_correct_by_trial_index['size'] > 1.]
+    observer_correct_by_trial_index = observer_correct_by_trial_index[
+        observer_correct_by_trial_index['size'] != 0.]
+
+    fig, ax = plt.subplots(figsize=(4, 3))
+    # fig.suptitle('Correct Action Trials / Total Trials by Trial Within Block (All Contrast Trials)')
+    ax.set_xlabel('Trial Within Block')
+    ax.set_ylabel('# Correct / # Trials\n(Zero Contrast Trials)')
+    ax.set_ylim([0., 1.05])
+    ax.set_xlim([0., 101.])
+    # fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
+
+    ax.plot(
+        1 + rnn_correct_by_trial_index.index.values,
+        rnn_correct_by_trial_index['mean'],
+        '-o',
+        markersize=1,
+        linewidth=1,
+        color=side_color_map['correct'],
+        label='RNN')
+
+    ax.fill_between(
+        x=1 + rnn_correct_by_trial_index.index.values,
+        y1=rnn_correct_by_trial_index['mean']
+           - rnn_correct_by_trial_index['sem'],
+        y2=rnn_correct_by_trial_index['mean']
+           + rnn_correct_by_trial_index['sem'],
+        alpha=0.3,
+        linewidth=0,
+        color=side_color_map['correct'])
+
+    ax.plot(
+        1 + observer_correct_by_trial_index.index.values,
+        observer_correct_by_trial_index['mean'],
+        '--o',
+        markersize=1,
+        linewidth=1,
+        color=side_color_map['ideal_correct'],
+        label='Bayesian Observer')
+
+    ax.fill_between(
+        x=1 + observer_correct_by_trial_index.index.values,
+        y1=observer_correct_by_trial_index['mean']
+           - observer_correct_by_trial_index['sem'],
+        y2=observer_correct_by_trial_index['mean']
+           + observer_correct_by_trial_index['sem'],
+        alpha=0.3,
+        linewidth=0,
+        color=side_color_map['ideal'])
+
+    actor_session_data = hook_input['bayesian_actor_session_data']
+    actor_zero_contrast_trial_end_data = actor_session_data[
+        (actor_session_data.trial_end == 1.) & (actor_session_data.trial_end == 0.)].copy()
+
+    # plot trial number within block (x) vs probability of correct response (y)
+    actor_correct_by_trial_index = actor_zero_contrast_trial_end_data.groupby(['trial_index']).agg({
+        'correct_action_taken': ['mean', 'sem', 'size'],
+    })['correct_action_taken']
+
+    # drop NaN/0. sem trials
+    actor_correct_by_trial_index = actor_correct_by_trial_index[
+        actor_correct_by_trial_index['size'] > 1.]
+
+    ax.plot(
+        1 + actor_correct_by_trial_index.index.values,
+        actor_correct_by_trial_index['mean'],
+        '-o',
+        markersize=1,
+        linewidth=1,
+        color=side_color_map['ideal_correct'],
+        label='Bayesian Actor')
+
+    ax.fill_between(
+        x=1 + actor_correct_by_trial_index.index.values,
+        y1=actor_correct_by_trial_index['mean']
+           - actor_correct_by_trial_index['sem'],
+        y2=actor_correct_by_trial_index['mean']
+           + actor_correct_by_trial_index['sem'],
+        alpha=0.3,
+        linewidth=0,
+        color=side_color_map['ideal'])
+
+    ax.legend(markerscale=.1)
+    hook_input['tensorboard_writer'].add_figure(
+        tag='behav_prob_correct_action_by_trial_within_block_zero_contrast',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
@@ -1265,7 +1375,6 @@ def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
     ax.set_ylabel('Trial Outcome (%)')
     ax.set_xlabel('Signed Stimulus Contrast')
     ax.set_ylim([-0.05, 1.05])
-
     width = 0.35
     rects = ax.bar(
         trial_outcome_by_trial_strength.index,
@@ -1273,7 +1382,6 @@ def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
         width=width,
         label='RNN Correct Action',
         color=side_color_map['correct'])
-
     # add text below specifying the y value
     # for rect in rects:
     #     height = rect.get_height()
@@ -1282,14 +1390,12 @@ def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
     #                 xytext=(0, -12),  # 9 points vertical offset
     #                 textcoords="offset points",
     #                 ha='center', va='bottom')
-
     ax.bar(trial_outcome_by_trial_strength.index,
            trial_outcome_by_trial_strength.incorrect_action_taken,
            width=width,
            bottom=trial_outcome_by_trial_strength.correct_action_taken,
            label='RNN Incorrect Action',
            color=side_color_map['incorrect'])
-
     ax.bar(trial_outcome_by_trial_strength.index,
            trial_outcome_by_trial_strength.is_timeout,
            width=width,
@@ -1297,7 +1403,6 @@ def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
                   + trial_outcome_by_trial_strength.incorrect_action_taken,
            label='RNN Timeout',
            color=side_color_map['timeout'])
-
     ax.plot(
         actor_trial_outcome_by_trial_strength.index,
         actor_trial_outcome_by_trial_strength.correct_action_taken,
@@ -1305,7 +1410,6 @@ def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
         color=side_color_map['ideal_correct'],
         label='Bayesian Actor Correct Actions',
         markersize=2)
-
     ax.plot(
         observer_trial_outcome_by_trial_strength.index,
         observer_trial_outcome_by_trial_strength.bayesian_observer_correct_action_taken,
@@ -1313,7 +1417,8 @@ def hook_plot_behav_trial_outcome_by_trial_strength(hook_input):
         color=side_color_map['ideal_correct'],
         label='Bayesian Observer Correct Actions',
         markersize=2)
-
+    ax.axhline(y=0.5, color='k')
+    plt.text(0.0, 0.45, 'Chance', fontsize=10, va='center', ha='center')
     ax.legend(markerscale=0.1)
     hook_input['tensorboard_writer'].add_figure(
         tag='behav_trial_outcome_by_trial_strength',
@@ -1339,7 +1444,7 @@ def hook_plot_compare_all_rnns_prob_correct_by_strength_concordant(hook_input):
         hook_input['radd_session_data'],
         hook_input['two_unit_task_trained_session_data']
     ]
-    colors = ['tab:purple', 'tab:green', 'tab:pink', 'tab:cyan']
+    colors = ['#984ea3', 'tab:green', 'tab:pink', 'tab:cyan']
     for model_name, session_data, color in zip(model_names, session_datas, colors):
 
         # keep only last dts in trials
@@ -1363,6 +1468,7 @@ def hook_plot_compare_all_rnns_prob_correct_by_strength_concordant(hook_input):
                 avg_correct_action_prob_by_stim_strength.index,
                 avg_correct_action_prob_by_stim_strength,
                 style,
+                markersize=2,
                 # solid lines for consistent block side, trial side; dotted otherwise
                 label=label,
                 color=color)
@@ -1404,7 +1510,9 @@ def hook_plot_compare_all_rnns_prob_correct_by_trial_within_block(hook_input):
         hook_input['radd_session_data'],
         hook_input['two_unit_task_trained_session_data']
     ]
-    colors = ['tab:purple', 'tab:green', 'tab:pink', 'tab:cyan']
+
+    # purple, green,
+    colors = ['#984ea3', '#4daf4a', 'tab:pink', 'tab:cyan']
     for model_name, session_data, color in zip(model_names, session_datas, colors):
 
         # keep only last dts in trials
@@ -1617,9 +1725,9 @@ def hook_plot_model_effective_circuit(hook_input):
 
     fig, axes = plt.subplots(
         nrows=1,
-        ncols=3,
-        figsize=(12, 3),
-        gridspec_kw={"width_ratios": [1, 1, 1]})
+        ncols=2,
+        figsize=(8, 3),
+        gridspec_kw={"width_ratios": [1, 1]})
     # recurrent_mask_str = hook_input['model'].model_kwargs['connectivity_kwargs']['recurrent_mask']
     # fig.text(0, 0, hook_input['model'].description_str, transform=fig.transFigure)
 
@@ -1715,7 +1823,48 @@ def hook_plot_model_effective_circuit(hook_input):
 
 def hook_plot_model_recurrent_weight_distributions(hook_input):
 
-    # TODO: finish this
+    # TODO: this is duplicated code from hook_plot_model_effective_circuit()
+
+    # hidden states shape: (num rnn steps, num layers, hidden dimension)
+    hidden_states = hook_input['hidden_states']
+    hidden_size = hidden_states.shape[2]
+
+    # reshape to (num trials, num layers * hidden dimension)
+    hidden_states = hidden_states.reshape(hidden_states.shape[0], -1)
+    trial_side = np.expand_dims(hook_input['session_data'].trial_side.values, 1)
+    trial_side_orthogonal = np.expand_dims(hook_input['session_data'].trial_side_orthogonal.values, 1)
+    block_side = np.expand_dims(hook_input['session_data'].block_side.values, 1)
+    feedback = np.expand_dims(hook_input['session_data'].reward.values, 1)
+
+    # construct correlation matrix
+    hidden_states_and_task_variables = np.hstack((
+        hidden_states,
+        trial_side,
+        trial_side_orthogonal,
+        block_side,
+        feedback))
+    hidden_states_and_task_variables_correlations = np.corrcoef(hidden_states_and_task_variables.T)
+    # due to machine error, correlation matrix isn't exactly symmetric (typically has e-16 errors)
+    # so make it symmetric
+    hidden_states_and_task_variables_correlations = (hidden_states_and_task_variables_correlations +
+                                                     hidden_states_and_task_variables_correlations.T) / 2
+    hidden_state_self_correlations = hidden_states_and_task_variables_correlations[:hidden_size, :hidden_size]
+    hidden_state_task_correlations = hidden_states_and_task_variables_correlations[:hidden_size, hidden_size:]
+
+    # compute pairwise distances
+    pdist = spc.distance.pdist(hidden_state_self_correlations)
+    linkage = spc.linkage(pdist, method='complete')
+    labels = spc.fcluster(linkage, 0.5 * np.max(pdist), 'distance')
+    indices = np.argsort(labels)
+
+    recurrent_matrix = hook_input['model'].core.weight_hh_l0.data.numpy()
+    dimension_ratio = recurrent_matrix.shape[0] / recurrent_matrix.shape[1]
+    # # RNN weight will have shape (hidden size, hidden size)
+    if dimension_ratio == 1:
+        recurrent_matrix = recurrent_matrix[indices][:, indices]
+    else:
+        raise NotImplementedError
+
     fig, axes = plt.subplots(nrows=2, ncols=2, sharex=True, sharey=True)
     for row in range(2):
         for col in range(2):
@@ -1730,7 +1879,12 @@ def hook_plot_model_recurrent_weight_distributions(hook_input):
                 ax=ax)
             ax.axvline(recurrent_quadrant_weights.mean(), color='k')
             ax.set_yticklabels([])
-    plt.show()
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag='model_recurrent_weight_distributions',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
 def hook_plot_model_hidden_unit_fraction_var_explained(hook_input):

@@ -55,12 +55,12 @@ def add_analysis_data_to_hook_input(hook_input):
         hidden_states=reshaped_hidden_states,
         model_readout_weights=hook_input['model'].readout.weight.data.numpy())
 
-    # not used in NeurIPS paper, I think 2020-08-08
+    # not used in NeurIPS paper, I think. Comment made 2020-08-08
     hidden_states_jl_results = compute_model_hidden_states_jl(
         hidden_states=reshaped_hidden_states,
         model_readout_weights=hook_input['model'].readout.weight.data.numpy())
 
-    model_state_space_vector_fields_results = compute_model_state_space_vector_fields(
+    model_state_space_vector_fields_results = compute_state_space_vector_fields(
         session_data=hook_input['session_data'],
         pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
 
@@ -97,8 +97,12 @@ def add_analysis_data_to_hook_input(hook_input):
     run_two_unit_task_trained_model_results = run_two_unit_task_trained_model(
         envs=hook_input['envs'])
 
+    two_unit_task_trained_state_space_vector_fields_results = compute_state_space_vector_fields(
+        session_data=run_two_unit_task_trained_model_results['two_unit_task_trained_session_data'],
+        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
+
     distill_model_traditional_results = distill_model_traditional(
-        session_data=hook_input['session_data'],
+        model_to_distill=hook_input['model'],
         analyze_dir=hook_input['tensorboard_writer'].log_dir)
 
     run_traditionally_distilled_model_results = run_traditionally_distilled_model(
@@ -984,8 +988,8 @@ def compute_model_block_readout_vectors(session_data,
     return block_readout_weights_results
 
 
-def compute_model_state_space_vector_fields(session_data,
-                                            pca_hidden_states):
+def compute_state_space_vector_fields(session_data,
+                                      pca_hidden_states):
     model_state_space_vector_fields = pd.DataFrame(
         columns=['left_stimulus', 'right_stimulus', 'feedback',
                  'pca_hidden_states_pre', 'pca_hidden_states_post',
@@ -1129,9 +1133,6 @@ def compute_optimal_observers(envs,
         envs=envs)
 
     optimal_bayesian_exp_weighted_actor_results = compute_optimal_bayesian_exp_weighted_actor(
-        envs=envs)
-
-    compute_optimal_bayesian_exp_weighted_actor(
         envs=envs)
 
     compute_optimal_bayesian_observer_block_side(
@@ -1692,9 +1693,9 @@ def distill_model_radd(session_data,
     return radd_distilled_model_results
 
 
-def distill_model_traditional(session_data,
+def distill_model_traditional(model_to_distill,
                               analyze_dir,
-                              num_gradient_steps=15000):
+                              num_gradient_steps=10001):
 
     # create 2 dimension RNN
     traditional_distilled_model_params = {
@@ -1722,12 +1723,14 @@ def distill_model_traditional(session_data,
 
     # if already exists, load from disk
     if os.path.isfile(traditionally_distilled_checkpoint_path):
+        logging.info('Loading traditionally distilled model from checkpoint...')
         save_dict = torch.load(traditionally_distilled_checkpoint_path)
         traditionally_distilled_model.load_state_dict(save_dict['model_state_dict'])
         training_losses = save_dict['training_losses']
 
     # otherwise, train and save to disk
     else:
+        logging.info('Training traditionally distilled model from scratch...')
 
         assert isinstance(num_gradient_steps, int)
         assert num_gradient_steps > 0
@@ -1746,30 +1749,39 @@ def distill_model_traditional(session_data,
             model=traditionally_distilled_model,
             optimizer_params=traditional_distilled_optimizer_params)
 
-        # shape: (batch size = 1, sequence length, 2)
-        stimuli = torch.unsqueeze(torch.from_numpy(
-            np.stack([
-                session_data['left_stimulus'],
-                session_data['right_stimulus']],
-                axis=1)),
-            dim=0).double()
+        # create env to generate training data
+        from utils.env import create_biased_choice_worlds
+        from utils.run import create_loss_fn
+        traditionally_distilled_env_params = {
+            "kwargs": {
+                "block_side_probs": [
+                    [
+                        0.8,
+                        0.2
+                    ],
+                    [
+                        0.2,
+                        0.8
+                    ]
+                ],
+                "blocks_per_session": 4,
+                "max_obs_per_trial": 10,
+                "max_stimulus_strength": 2.5,
+                "max_trials_per_block": 100,
+                "min_stimulus_strength": 0,
+                "min_trials_per_block": 20,
+                "num_stimulus_strength": 6,
+                "rnn_steps_before_obs": 2,
+                "time_delay_penalty": -0.05,
+                "trials_per_block_param": 0.02
+            },
+            "num_sessions": 1
+        }
 
-        # shape (batch size =1, sequence length)
-        rewards = torch.unsqueeze(torch.from_numpy(
-            session_data['reward'].shift(1).fillna(0).values),
-            dim=0).double()
-
-        model_input = dict(
-            stimulus=stimuli,
-            reward=rewards,
+        envs = create_biased_choice_worlds(
+            env_params=traditionally_distilled_env_params,
+            base_loss_fn=create_loss_fn(dict(loss_fn='nll')),  # won't actually be used
         )
-
-        targets = torch.unsqueeze(torch.from_numpy(
-            np.stack([
-                session_data['left_action_prob'],
-                session_data['right_action_prob']],
-                axis=1)).double(),
-            dim=0).double()
 
         # https://discuss.pytorch.org/t/soft-cross-entropy-loss-tf-has-it-does-pytorch-have-it/69501/2
         # https://discuss.pytorch.org/t/catrogircal-cross-entropy-with-soft-classes/50871/2
@@ -1786,6 +1798,37 @@ def distill_model_traditional(session_data,
         for grad_step in range(num_gradient_steps):
             if hasattr(traditionally_distilled_model, 'reset_core_hidden'):
                 traditionally_distilled_model.reset_core_hidden()
+
+            model_to_distill_session_data = run_envs(
+                model=model_to_distill,
+                envs=envs,
+                log_results=False)['session_data']
+
+            # shape: (batch size = 1, sequence length, 2)
+            stimuli = torch.unsqueeze(torch.from_numpy(
+                np.stack([
+                    model_to_distill_session_data['left_stimulus'],
+                    model_to_distill_session_data['right_stimulus']],
+                    axis=1)),
+                dim=0).double()
+
+            # shape (batch size =1, sequence length)
+            rewards = torch.unsqueeze(torch.from_numpy(
+                model_to_distill_session_data['reward'].shift(1).fillna(0).values),
+                dim=0).double()
+
+            model_input = dict(
+                stimulus=stimuli,
+                reward=rewards,
+            )
+
+            targets = torch.unsqueeze(torch.from_numpy(
+                np.stack([
+                    model_to_distill_session_data['left_action_prob'],
+                    model_to_distill_session_data['right_action_prob']],
+                    axis=1)).double(),
+                                      dim=0).double()
+
             traditional_distilled_optimizer.zero_grad()
             traditional_distilled_model_outputs = traditionally_distilled_model(model_input)
             loss = soft_cross_entropy(
@@ -1793,19 +1836,20 @@ def distill_model_traditional(session_data,
                 predicted=traditional_distilled_model_outputs['prob_output'])
             loss.backward()
             if grad_step % 100 == 0:
-                logging.info(f'{grad_step}: {loss.item()}')
+                logging.info(f'Grad Step {grad_step}: {loss.item()}')
+
+                # save model so we don't have to wait next time
+                save_dict = dict(
+                    model_state_dict=traditionally_distilled_model.state_dict(),
+                    global_step=grad_step,
+                    training_losses=training_losses)
+
+                torch.save(
+                    obj=save_dict,
+                    f=traditionally_distilled_checkpoint_path)
+
             training_losses[grad_step] = loss.item()
             traditional_distilled_optimizer.step()
-
-        # save model so we don't have to wait next time
-        save_dict = dict(
-            model_state_dict=traditionally_distilled_model.state_dict(),
-            global_step=grad_step,
-            training_losses=training_losses)
-
-        torch.save(
-            obj=save_dict,
-            f=traditionally_distilled_checkpoint_path)
 
     distill_model_traditional_results = dict(
         traditionally_distilled_model=traditionally_distilled_model,
@@ -1973,6 +2017,7 @@ def run_two_unit_task_trained_model(envs):
         train_run_dir=train_run_dir,
         params=two_unit_params)
 
+    logging.info('Running 2D task-trained model...')
     two_unit_session_data = run_envs(
         model=two_unit_tasked_trained_rnn,
         envs=envs)['session_data']

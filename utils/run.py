@@ -67,7 +67,7 @@ def convert_session_data_to_ibl_changepoint_csv(session_data,
 def create_logger(run_dir):
 
     logging.basicConfig(
-        filename=os.path.join(run_dir, 'analyze.log'),
+        filename=os.path.join(run_dir, 'logging.log'),
         level=logging.DEBUG)
 
     logging.info('Logger created successfully')
@@ -135,7 +135,7 @@ def create_params_analyze(train_run_dir):
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
     params['env']['kwargs']['blocks_per_session'] = 1000
     # params['env']['kwargs']['blocks_per_session'] = 100
-    # params['env']['kwargs']['blocks_per_session'] = 10
+    params['env']['kwargs']['blocks_per_session'] = 10
 
     return params
 
@@ -149,8 +149,8 @@ def create_run_id(params):
 
     included_params = [
         params['model']['architecture'],
-        'block_side_probs=' + str(params['env']['kwargs']['block_side_probs'][0][0]),
         'max_stim_strength=' + str(params['env']['kwargs']['max_stimulus_strength']),
+        'hidden_size=' + str(params['model']['kwargs']['core_kwargs']['hidden_size']),
     ]
     separator = ', '
     run_id = separator.join(str(ip) for ip in included_params)
@@ -240,7 +240,9 @@ def load_checkpoint(train_run_dir,
 
 
 def run_envs(model,
-             envs):
+             envs,
+             log_results=True):
+
     total_reward = torch.zeros(1, dtype=torch.double, requires_grad=True)
     total_loss = torch.zeros(1, dtype=torch.double, requires_grad=True)
     if hasattr(model, 'reset_core_hidden'):
@@ -273,25 +275,33 @@ def run_envs(model,
 
     action_taken_by_total_trials = session_data[
         session_data.trial_end == 1.].action_taken.mean()
-    logging.info(f'# Action Trials / # Total Trials: '
-                 f'{action_taken_by_total_trials}')
 
     correct_action_taken_by_action_taken = session_data[
         session_data.action_taken == 1.].correct_action_taken.mean()
-    logging.info(f'# Correct Trials / # Action Trials: '
-                 f'{correct_action_taken_by_action_taken}')
 
     correct_action_taken_by_total_trials = session_data[
         session_data.trial_end == 1.].correct_action_taken.mean()
-    logging.info(f'# Correct Trials / # Total Trials: '
-                 f'{correct_action_taken_by_total_trials}')
 
     feedback_by_dt = session_data.reward.mean()
 
     dts_by_trial = session_data.groupby([
         'session_index', 'block_index', 'trial_index']).size().mean()
-    logging.info(f'Average steps per trial: '
-                 f'{dts_by_trial}')
+
+    if log_results:
+
+        logging.info(f'Average Loss Per Dt: {avg_loss_per_dt}')
+
+        logging.info(f'# Action Trials / # Total Trials: '
+                     f'{action_taken_by_total_trials}')
+
+        logging.info(f'# Correct Trials / # Action Trials: '
+                     f'{correct_action_taken_by_action_taken}')
+
+        logging.info(f'# Correct Trials / # Total Trials: '
+                     f'{correct_action_taken_by_total_trials}')
+
+        logging.info(f'Average steps per trial: '
+                     f'{dts_by_trial}')
 
     run_envs_output = dict(
         session_data=session_data,
@@ -321,6 +331,7 @@ def setup_analyze(train_run_id):
     run_dir = 'runs'
     train_run_dir = os.path.join(run_dir, train_run_id)
     analyze_run_dir = os.path.join(train_run_dir, 'analyze')
+    os.makedirs(analyze_run_dir, exist_ok=True)
     create_logger(run_dir=analyze_run_dir)
     params = create_params_analyze(train_run_dir=train_run_dir)
     set_seeds(seed=params['run']['seed'])
@@ -355,9 +366,12 @@ def setup_train():
 
     log_dir = 'runs'
     os.makedirs(log_dir, exist_ok=True)
+
     params = create_params_train()
     run_id = create_run_id(params=params)
     run_dir = os.path.join(log_dir, run_id + '_' + str(datetime.now()))
+    os.makedirs(run_dir, exist_ok=True)
+
     create_logger(run_dir=run_dir)
     set_seeds(seed=params['run']['seed'])
     tensorboard_writer = create_tensorboard_writer(
