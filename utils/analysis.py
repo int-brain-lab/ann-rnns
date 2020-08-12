@@ -97,9 +97,9 @@ def add_analysis_data_to_hook_input(hook_input):
     run_two_unit_task_trained_model_results = run_two_unit_task_trained_model(
         envs=hook_input['envs'])
 
-    two_unit_task_trained_state_space_vector_fields_results = compute_state_space_vector_fields(
-        session_data=run_two_unit_task_trained_model_results['two_unit_task_trained_session_data'],
-        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
+    # two_unit_task_trained_state_space_vector_fields_results = compute_state_space_vector_fields(
+    #     session_data=run_two_unit_task_trained_model_results['two_unit_task_trained_session_data'],
+    #     pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
 
     distill_model_traditional_results = distill_model_traditional(
         model_to_distill=hook_input['model'],
