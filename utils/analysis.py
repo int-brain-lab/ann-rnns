@@ -21,8 +21,8 @@ import torch
 import torch.autograd
 import torch.optim
 
-from utils.models import BayesianActor, ExponentialWeightedActor
-from utils.run import create_model, create_optimizer, create_params_analyze,\
+from utils.models import BayesianActor, BayesianBlocklessActor, ExponentialWeightedActor
+from utils.run import create_model, create_optimizer, create_params_analyze, \
     load_checkpoint, run_envs
 
 possible_stimuli = torch.DoubleTensor(
@@ -64,13 +64,14 @@ def add_analysis_data_to_hook_input(hook_input):
         session_data=hook_input['session_data'],
         pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
 
-    model_block_readout_vectors_results = compute_model_block_readout_vectors(
-        session_data=hook_input['session_data'],
-        hidden_states=reshaped_hidden_states,
-        pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
-        pca=hidden_states_pca_results['pca'],
-        trial_readout_vector=hidden_states_pca_results['trial_readout_vector'],
-        pca_trial_readout_vector=hidden_states_pca_results['pca_trial_readout_vector'])
+    model_block_readout_vectors_results = \
+        compute_model_block_readout_vectors(
+            session_data=hook_input['session_data'],
+            hidden_states=reshaped_hidden_states,
+            pca_hidden_states=hidden_states_pca_results['pca_hidden_states'],
+            pca=hidden_states_pca_results['pca'],
+            trial_readout_vector=hidden_states_pca_results['trial_readout_vector'],
+            pca_trial_readout_vector=hidden_states_pca_results['pca_trial_readout_vector'])
 
     model_task_aligned_states_results = compute_model_task_aligned_states(
         session_data=hook_input['session_data'],
@@ -78,7 +79,7 @@ def add_analysis_data_to_hook_input(hook_input):
         pca_trial_readout_vector=hidden_states_pca_results['pca_trial_readout_vector'],
         pca_block_readout_vector=model_block_readout_vectors_results['pca_block_readout_vector'])
 
-    fixed_points_results = compute_model_fixed_points_by_stimulus_and_feedback(
+    model_fixed_points_results = compute_model_fixed_points_by_stimulus_and_feedback(
         model=hook_input['model'],
         pca=hidden_states_pca_results['pca'],
         pca_xrange=hidden_states_pca_results['pca_xrange'],
@@ -96,10 +97,6 @@ def add_analysis_data_to_hook_input(hook_input):
 
     run_two_unit_task_trained_model_results = run_two_unit_task_trained_model(
         envs=hook_input['envs'])
-
-    # two_unit_task_trained_state_space_vector_fields_results = compute_state_space_vector_fields(
-    #     session_data=run_two_unit_task_trained_model_results['two_unit_task_trained_session_data'],
-    #     pca_hidden_states=hidden_states_pca_results['pca_hidden_states'])
 
     distill_model_traditional_results = distill_model_traditional(
         model_to_distill=hook_input['model'],
@@ -123,6 +120,17 @@ def add_analysis_data_to_hook_input(hook_input):
         input_matrix=distill_model_radd_results['B_prime'],
         bias_vector=distill_model_radd_results['intercept'])
 
+    # TODO: refactor this properly to get RADD vector field plots
+    smaller_models_fixed_points_results = compute_smaller_models_fixed_points_by_stimulus_and_feedback(
+            two_unit_task_trained_rnn=run_two_unit_task_trained_model_results['two_unit_task_trained_rnn'],
+            two_unit_task_trained_session_data=run_two_unit_task_trained_model_results[
+                'two_unit_task_trained_session_data'],
+            radd_rnn=run_radd_distilled_model_results['radd_model'],
+            radd_session_data=run_radd_distilled_model_results['radd_session_data'],
+            traditionally_distilled_rnn=distill_model_traditional_results['traditionally_distilled_model'],
+            traditionally_distilled_session_data=run_traditionally_distilled_model_results[
+                'traditionally_distilled_session_data'])
+
     optimal_observers_results = compute_optimal_observers(
         envs=hook_input['envs'],
         session_data=hook_input['session_data'],
@@ -138,7 +146,7 @@ def add_analysis_data_to_hook_input(hook_input):
         hidden_states_pca_results,
         model_block_readout_vectors_results,
         model_task_aligned_states_results,
-        fixed_points_results,
+        model_fixed_points_results,
         eigenvalues_svd_results,
         distill_model_radd_results,
         distill_model_traditional_results,
@@ -146,6 +154,7 @@ def add_analysis_data_to_hook_input(hook_input):
         run_traditionally_distilled_model_results,
         run_two_unit_task_trained_model_results,
         model_state_space_vector_fields_results,
+        smaller_models_fixed_points_results,
         optimal_observers_results,
         # mice_behavior_data_results
     ]
@@ -458,6 +467,21 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
                                                         trial_readout_vector,
                                                         block_readout_vector,
                                                         num_grad_steps=100):
+    """
+
+    :param model:
+    :param pca:
+    :param pca_xrange:
+    :param pca_yrange:
+    :param jlm:
+    :param jlm_xrange:
+    :param jlm_yrange:
+    :param pca_hidden_states:
+    :param trial_readout_vector: shape (1, hidden state dim)
+    :param block_readout_vector: shape (1, hidden state dim)
+    :param num_grad_steps:
+    :return:
+    """
     assert num_grad_steps > 2
 
     sampled_states = sample_model_states_in_state_space(
@@ -574,6 +598,95 @@ def compute_model_fixed_points_by_stimulus_and_feedback(model,
         fixed_points_basins_df=fixed_points_basins_df)
 
     return model_fixed_points_results
+
+
+def compute_smaller_models_fixed_points_by_stimulus_and_feedback(two_unit_task_trained_rnn,
+                                                                 two_unit_task_trained_session_data,
+                                                                 radd_rnn,
+                                                                 radd_session_data,
+                                                                 traditionally_distilled_rnn,
+                                                                 traditionally_distilled_session_data):
+
+    # we want vector field plots for RADD RNN, task trained RNN, traditional distillation RNN.
+    # getting this info was implemented in too complicated a manner and now with <24 hours left
+    # we need to hack this
+    # TODO: fix this later
+
+    models_and_session_data = [
+        ('two_unit_task_trained', two_unit_task_trained_rnn, two_unit_task_trained_session_data),
+        ('radd', radd_rnn, radd_session_data),
+        ('traditionally_distilled', traditionally_distilled_rnn, traditionally_distilled_session_data),
+    ]
+
+    # we won't actually use PCA or JL. Set pca, jlm to identity
+    pca, jlm = PCA(n_components=2), GaussianRandomProjection(n_components=2)
+    pca = pca.fit(np.array([[1, 1], [1, 1]]))
+    pca.mean_ = np.array([0., 0.])
+    jlm = jlm.fit(np.array([[1, 1], [1, 1]]))
+    jlm.components_ = np.eye(2)
+
+    smaller_models_fixed_points_by_stimulus_and_feedback_results = dict()
+    for prefix, model, session_data in models_and_session_data:
+        # we won't actually use PCA here
+        pca_hidden_states = np.stack(session_data.hidden_state.values, axis=0)
+        pca_hidden_states = pca_hidden_states.reshape(pca_hidden_states.shape[0], -1)
+        pca_xrange = (np.min(pca_hidden_states[:, 0]), np.max(pca_hidden_states[:, 0]))
+        pca_yrange = (np.min(pca_hidden_states[:, 1]), np.max(pca_hidden_states[:, 1]))
+
+        # shape (2, 2). take only RIGHT action vector (second row)
+        trial_readout_vector = model.readout.weight.detach().numpy()[np.newaxis, 1, :]
+        session_data['magn_along_trial_vector'] = np.dot(
+            pca_hidden_states,
+            trial_readout_vector.flatten())
+        # trial_readout_vector /= np.linalg.norm(trial_readout_vector)
+
+        # for block readout vector, need to figure it out
+        # transform from {-1, 1} to {0, 1}
+        block_sides = (1 + session_data.block_side.values) / 2
+        train_regressor, test_regressor, train_block_sides, \
+        test_block_sides = train_test_split(
+            pca_hidden_states,
+            block_sides,
+            test_size=.33)
+
+        logistic_regression = sm.Logit(
+            endog=train_block_sides,
+            exog=train_regressor)
+        logistic_regression_result = logistic_regression.fit()
+
+        # compute accuracy of classifier
+        predicted_test_block_sides = logistic_regression_result.predict(test_regressor)
+        block_classifier_accuracy = np.mean(
+            test_block_sides == np.round(predicted_test_block_sides))
+        logging.info(f'Block classifier accuracy for {prefix}: {block_classifier_accuracy}')
+
+        # select RIGHT block side readout vector
+        block_readout_vector = logistic_regression_result.params[np.newaxis, :]
+        # this is so bad, and this should not be done here, but whatever
+        session_data['magn_along_block_vector'] = np.dot(
+            pca_hidden_states,
+            block_readout_vector.flatten())
+        # block_readout_vector /= np.linalg.norm(block_readout_vector)
+
+        model_fixed_points_by_stimulus_and_feedback_results = compute_model_fixed_points_by_stimulus_and_feedback(
+            model=model,
+            pca=pca,
+            pca_xrange=pca_xrange,
+            pca_yrange=pca_yrange,
+            jlm=jlm,
+            jlm_xrange=None,
+            jlm_yrange=None,
+            pca_hidden_states=pca_hidden_states,
+            trial_readout_vector=trial_readout_vector,
+            block_readout_vector=block_readout_vector)
+        smaller_models_fixed_points_by_stimulus_and_feedback_results[prefix + '_fixed_point_df'] = \
+            model_fixed_points_by_stimulus_and_feedback_results['fixed_point_df']
+        smaller_models_fixed_points_by_stimulus_and_feedback_results[prefix + '_trial_readout_vector'] = \
+            trial_readout_vector[0]  # drop first dim from shape (1, hidden state)
+        smaller_models_fixed_points_by_stimulus_and_feedback_results[prefix + '_block_readout_vector'] = \
+            trial_readout_vector[0]  # drop first dim from shape (1, hidden state)
+
+    return smaller_models_fixed_points_by_stimulus_and_feedback_results
 
 
 def compute_model_fixed_points_jacobians(model,
@@ -1132,6 +1245,9 @@ def compute_optimal_observers(envs,
     optimal_bayesian_actor_results = compute_optimal_bayesian_actor(
         envs=envs)
 
+    optimal_bayesian_blockless_actor_results = compute_optimal_bayesian_blockless_actor(
+        envs=envs)
+
     optimal_bayesian_exp_weighted_actor_results = compute_optimal_bayesian_exp_weighted_actor(
         envs=envs)
 
@@ -1172,6 +1288,8 @@ def compute_optimal_observers(envs,
         # coupled_observer_latents_posterior=coupled_observer_results['coupled_observer_latents_posterior'],
         bayesian_actor_session_data=optimal_bayesian_actor_results[
             'bayesian_actor_session_data'],
+        bayesian_blockless_actor_session_data=optimal_bayesian_blockless_actor_results[
+            'bayesian_blockless_actor_session_data'],
         bayesian_exp_weighted_actor_results=optimal_bayesian_exp_weighted_actor_results[
             'bayesian_exp_weighted_actor_session_data'],
         block_scaling_parameter=block_scaling_parameter,
@@ -1198,6 +1316,23 @@ def compute_optimal_bayesian_actor(envs):
     return optimal_bayesian_actor_results
 
 
+def compute_optimal_bayesian_blockless_actor(envs):
+    bayes_blockless_actor = BayesianBlocklessActor()
+    bayes_blockless_actor.reset(
+        num_sessions=len(envs),
+        block_side_probs=envs[0].block_side_probs,
+        possible_trial_strengths=envs[0].possible_trial_strengths,
+        possible_trial_strengths_probs=envs[0].possible_trial_strengths_probs,
+        trials_per_block_param=envs[0].trials_per_block_param)
+    logging.info('Running Bayesian Blockless Actor...')
+    run_envs_output = run_envs(
+        model=bayes_blockless_actor,
+        envs=envs)
+    optimal_bayesian_blockless_actor_results = dict(
+        bayesian_blockless_actor_session_data=run_envs_output['session_data'])
+    return optimal_bayesian_blockless_actor_results
+
+
 def compute_optimal_bayesian_exp_weighted_actor(envs):
     bayes_actor = ExponentialWeightedActor()
     bayes_actor.reset(
@@ -1205,7 +1340,7 @@ def compute_optimal_bayesian_exp_weighted_actor(envs):
         decay=0.9,
         possible_trial_strengths=envs[0].possible_trial_strengths,
         possible_trial_strengths_probs=envs[0].possible_trial_strengths_probs)
-    logging.info('Running Bayesian Actor...')
+    logging.info('Running Bayesian Exponentially Smoothing Actor...')
     run_envs_output = run_envs(
         model=bayes_actor,
         envs=envs)
@@ -1573,7 +1708,6 @@ def compute_psytrack_fit(session_data):
 def distill_model_radd(session_data,
                        pca,
                        task_aligned_hidden_states):
-
     left_stimulus = np.expand_dims(
         session_data['left_stimulus'].values,
         axis=1)
@@ -1633,8 +1767,8 @@ def distill_model_radd(session_data,
     inputs = X[:, 2:]
     for i in range(len(radd_states) - 1):
         radd_model_state = np.tanh(A_prime @ radd_model_state
-                                          + B_prime @ inputs[i, :]
-                                          + intercept)
+                                   + B_prime @ inputs[i, :]
+                                   + intercept)
         radd_states[i + 1, :] = radd_model_state
 
     rand_param_model_states = np.zeros_like(task_aligned_hidden_states)
@@ -1696,7 +1830,6 @@ def distill_model_radd(session_data,
 def distill_model_traditional(model_to_distill,
                               analyze_dir,
                               num_gradient_steps=10001):
-
     # create 2 dimension RNN
     traditional_distilled_model_params = {
         'architecture': 'rnn',
@@ -1937,7 +2070,6 @@ def run_radd_distilled_model(model_readout_norm,
                              recurrent_matrix,
                              input_matrix,
                              bias_vector):
-
     # create 2 dimension RNN
     distilled_model_params = {
         'architecture': 'rnn',
@@ -1951,7 +2083,7 @@ def run_radd_distilled_model(model_readout_norm,
             'connectivity_kwargs': {
                 'input_mask': 'none',
                 'recurrent_mask': 'none',
-                'readout_mask': 'none',},
+                'readout_mask': 'none', },
         },
     }
     radd_model = create_model(model_params=distilled_model_params)
@@ -1995,7 +2127,6 @@ def run_radd_distilled_model(model_readout_norm,
 
 def run_traditionally_distilled_model(traditionally_distilled_model,
                                       envs):
-
     logging.info('Running traditionally distilled model...')
     run_traditionally_distilled_model_results = run_envs(
         model=traditionally_distilled_model,
@@ -2008,22 +2139,21 @@ def run_traditionally_distilled_model(traditionally_distilled_model,
 
 
 def run_two_unit_task_trained_model(envs):
-
     train_run_dir = os.path.join(
         'runs', 'rnn, block_side_probs=0.80, snr=2.5, hidden_size=2')
     two_unit_params = create_params_analyze(
         train_run_dir=train_run_dir)
-    two_unit_tasked_trained_rnn, _, _ = load_checkpoint(
+    two_unit_task_trained_rnn, _, _ = load_checkpoint(
         train_run_dir=train_run_dir,
         params=two_unit_params)
 
     logging.info('Running 2D task-trained model...')
     two_unit_session_data = run_envs(
-        model=two_unit_tasked_trained_rnn,
+        model=two_unit_task_trained_rnn,
         envs=envs)['session_data']
 
     run_two_unit_task_trained_model_results = dict(
-        two_unit_task_trained=two_unit_tasked_trained_rnn,
+        two_unit_task_trained_rnn=two_unit_task_trained_rnn,
         two_unit_task_trained_session_data=two_unit_session_data
     )
 
@@ -2048,7 +2178,7 @@ def sample_model_states_in_state_space(projection_obj,
     pca_hidden_states = np.stack((pc1_values.flatten(), pc2_values.flatten())).T
     in_hull_indices = test_points_in_hull(p=pca_hidden_states, hull=convex_hull)
     pca_hidden_states = pca_hidden_states[in_hull_indices]
-    logging.info(f'Number of sampled states: {len(pca_hidden_states)}')
+    logging.info(f'Fraction of sampled states: {in_hull_indices.mean()}')
     sampled_states = projection_obj.inverse_transform(pca_hidden_states)
     return sampled_states
 

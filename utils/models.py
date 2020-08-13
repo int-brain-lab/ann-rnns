@@ -205,6 +205,19 @@ class BayesianActor(object):
             self.curr_block_posterior)
 
 
+class BayesianBlocklessActor(BayesianActor):
+
+    def __init__(self):
+        super(BayesianBlocklessActor, self).__init__()
+
+    def update_block_posterior(self, correct_stim_side):
+        # TODO: messy hack to performance of blockless Bayesian actor
+        self.curr_block_posterior = np.full(
+            shape=(1, 1, 2),
+            fill_value=0.5)
+        self.curr_stim_posterior = self.curr_block_posterior.copy()
+
+
 class ExponentialWeightedActor(object):
 
     def __init__(self):
@@ -378,6 +391,7 @@ class ExponentialWeightedActor(object):
 
         self.exp_decaying_stimulus_prior *= self.decay
         # TODO: check that this slicing is correct
+        # I think it is
         self.exp_decaying_stimulus_prior[:, :, correct_stim_side] += (1. - self.decay)
 
         # check that this is valid probability distribution

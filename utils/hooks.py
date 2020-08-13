@@ -43,6 +43,7 @@ def create_hook_fns_dict(hook_fns_frequencies,
 
 def create_hook_fns_analyze(checkpoint_grad_step):
     hook_fns_frequencies = [
+        # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_time_constants),
         (0, hook_write_scalars),
         (0, utils.plot.hook_plot_task_block_inference_multiple_blocks),
         (0, utils.plot.hook_plot_task_block_inference_single_block),
@@ -72,8 +73,11 @@ def create_hook_fns_analyze(checkpoint_grad_step):
         (0, utils.plot.hook_plot_radd_behav_prob_correct_by_strength_concordant),
         (0, utils.plot.hook_plot_radd_behav_prob_correct_by_trial_within_block),
         (0, utils.plot.hook_plot_radd_state_space_distance_decoherence),
+        (0, utils.plot.hook_plot_radd_state_space_effect_of_obs_along_task_aligned_vectors),
+        (0, utils.plot.hook_plot_radd_state_space_projection_on_right_block_vector_by_trial_within_block),
         (0, utils.plot.hook_plot_radd_state_space_trajectories_within_block),
         (0, utils.plot.hook_plot_radd_state_space_trajectories_within_trial),
+        (0, utils.plot.hook_plot_radd_state_space_vector_fields_ideal),
         (0, utils.plot.hook_plot_state_space_effect_of_obs_along_task_aligned_vectors),
         (0, utils.plot.hook_plot_state_space_effect_of_feedback_along_task_aligned_vectors),
         (0, utils.plot.hook_plot_state_space_effect_of_feedback_along_task_aligned_vectors_by_side),
@@ -88,11 +92,12 @@ def create_hook_fns_analyze(checkpoint_grad_step):
         (0, utils.plot.hook_plot_state_space_vector_fields_real),
         # (0, utils.plot.hook_plot_pca_hidden_state_trajectories_controlled),
         # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_eigenvalues_complex_plane),
-        # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_time_constants),
         (0, utils.plot.hook_plot_task_block_side_trial_side_by_trial_number),
         (0, utils.plot.hook_plot_task_stimuli_by_block_side),
         (0, utils.plot.hook_plot_task_stimuli_by_correct_trial_side),
         (0, utils.plot.hook_plot_task_stimuli_and_model_prob_in_first_n_trials),
+        (0, utils.plot.hook_plot_two_unit_task_trained_state_space_vector_fields_ideal),
+        (0, utils.plot.hook_plot_traditionally_distilled_state_space_vector_fields_ideal),
     ]
 
     # every frequency must be zero

@@ -135,7 +135,7 @@ def create_params_analyze(train_run_dir):
     # env_kwargs['trials_per_block_param'] = 1 / 65  # make longer blocks more common
     params['env']['kwargs']['blocks_per_session'] = 1000
     # params['env']['kwargs']['blocks_per_session'] = 100
-    params['env']['kwargs']['blocks_per_session'] = 10
+    # params['env']['kwargs']['blocks_per_session'] = 50
 
     return params
 
@@ -282,6 +282,9 @@ def run_envs(model,
     correct_action_taken_by_total_trials = session_data[
         session_data.trial_end == 1.].correct_action_taken.mean()
 
+    correct_action_taken_by_total_steps = np.mean(
+        session_data.correct_action_taken.fillna(0).values)
+
     feedback_by_dt = session_data.reward.mean()
 
     dts_by_trial = session_data.groupby([
@@ -289,7 +292,7 @@ def run_envs(model,
 
     if log_results:
 
-        logging.info(f'Average Loss Per Dt: {avg_loss_per_dt}')
+        logging.info(f'Average Loss Per Dt: {avg_loss_per_dt.item()}')
 
         logging.info(f'# Action Trials / # Total Trials: '
                      f'{action_taken_by_total_trials}')
@@ -299,6 +302,9 @@ def run_envs(model,
 
         logging.info(f'# Correct Trials / # Total Trials: '
                      f'{correct_action_taken_by_total_trials}')
+
+        logging.info(f'# Correct Trials / # Total Steps: '
+                     f'{correct_action_taken_by_total_steps}')
 
         logging.info(f'Average steps per trial: '
                      f'{dts_by_trial}')
@@ -310,7 +316,8 @@ def run_envs(model,
         dts_by_trial=dts_by_trial,
         action_taken_by_total_trials=action_taken_by_total_trials,
         correct_action_taken_by_action_taken=correct_action_taken_by_action_taken,
-        correct_action_taken_by_total_trials=correct_action_taken_by_total_trials
+        correct_action_taken_by_total_trials=correct_action_taken_by_total_trials,
+        correct_action_taken_by_total_steps=correct_action_taken_by_total_steps,
     )
 
     return run_envs_output
