@@ -78,7 +78,7 @@ def create_logger(run_dir):
     logging.getLogger().addHandler(console_handler)
 
     # disable matplotlib font warnings
-    # logging.getLogger('matplotlib.font_manager').disabled = True
+    logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
 
 def create_loss_fn(loss_fn_params):
