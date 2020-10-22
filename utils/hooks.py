@@ -43,6 +43,7 @@ def create_hook_fns_dict(hook_fns_frequencies,
 
 def create_hook_fns_analyze(checkpoint_grad_step):
     hook_fns_frequencies = [
+        (0, utils.plot.hook_plot_state_space_trajectories_different_block_same_stimuli),
         # (0, utils.plot.hook_plot_hidden_to_hidden_jacobian_time_constants),
         (0, hook_write_scalars),
         (0, utils.plot.hook_plot_task_block_inference_multiple_blocks),
@@ -98,6 +99,8 @@ def create_hook_fns_analyze(checkpoint_grad_step):
         (0, utils.plot.hook_plot_task_stimuli_and_model_prob_in_first_n_trials),
         (0, utils.plot.hook_plot_two_unit_task_trained_state_space_vector_fields_ideal),
         (0, utils.plot.hook_plot_traditionally_distilled_state_space_vector_fields_ideal),
+        (0, utils.plot.hook_plot_model_recurrent_weight_avg_by_cluster),
+        (0, utils.plot.hook_plot_model_recurrent_weight_by_cluster),
     ]
 
     # every frequency must be zero

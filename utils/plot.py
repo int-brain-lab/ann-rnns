@@ -1682,6 +1682,224 @@ def hook_plot_hidden_to_hidden_jacobian_time_constants(hook_input):
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
 
+def hook_plot_model_recurrent_weight_by_cluster(hook_input):
+
+    cutoff = 0.15
+    df = pd.DataFrame(dict(
+        trial_readout=hook_input['trial_readout_vector'][0],
+        block_readout=hook_input['block_readout_vector'][0]))
+    df['trial_bins'] = pd.cut(
+        df['trial_readout'],
+        bins=[-float('inf'), -cutoff, cutoff, float('inf')])
+    df['block_bins'] = pd.cut(
+        df['block_readout'],
+        bins=[-float('inf'), -cutoff, cutoff, float('inf')])
+
+    left_interval = pd.Interval(left=-np.inf, right=-cutoff, closed='right')
+    center_interval = pd.Interval(left=-cutoff, right=cutoff, closed='right')
+    right_interval = pd.Interval(left=cutoff, right=np.inf)
+
+    df['cluster'] = 'Remainder'
+    df['cluster'][(df['trial_bins'] == left_interval) &
+                  (df['block_bins'] == center_interval)] = 'Stim: -, Block: 0'
+    df['cluster'][(df['trial_bins'] == right_interval) &
+                  (df['block_bins'] == center_interval)] = 'Stim: +, Block: 0'
+    df['cluster'][(df['trial_bins'] == center_interval) &
+                  (df['block_bins'] == left_interval)] = 'Stim: 0, Block: -'
+    df['cluster'][(df['trial_bins'] == center_interval) &
+                  (df['block_bins'] == right_interval)] = 'Stim: 0, Block: +'
+
+    # redefine cluster as Categorical to enable sorting
+    df['cluster'] = pd.Categorical(df['cluster'], [
+        'Stim: 0, Block: +',
+        'Stim: 0, Block: -',
+        'Stim: +, Block: 0',
+        'Stim: -, Block: 0',
+        'Remainder'])
+    df.sort_values(by=['cluster'], inplace=True)
+
+    # create custom heatmap axis labels
+    cluster_nonchange_indices = df['cluster'].eq(df['cluster'].shift())
+    custom_ticklabels = df['cluster'].astype(np.str)
+    custom_ticklabels[cluster_nonchange_indices] = ''
+
+    recurrent_matrix = hook_input['model'].core.weight_hh_l0.detach().numpy()
+
+    fig, ax = plt.subplots()
+    indices = df.index.values
+    ax.set_title(f'Cutoff: {cutoff}')
+    sns.heatmap(recurrent_matrix[indices][:, indices],
+                cmap='RdBu_r',
+                center=0,
+                xticklabels=custom_ticklabels,  # indices
+                yticklabels=custom_ticklabels,  # indices
+                square=True,
+                ax=ax,
+                cbar_kws={'label': 'Avg Weight', 'shrink': 0.5})
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag='model_recurrent_weight_by_cluster',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+
+def hook_plot_model_recurrent_weight_avg_by_cluster(hook_input):
+
+    cutoff = 0.15
+    df = pd.DataFrame(dict(
+        trial_readout=hook_input['trial_readout_vector'][0],
+        block_readout=hook_input['block_readout_vector'][0]))
+    df['trial_bins'] = pd.cut(
+        df['trial_readout'],
+        bins=[-float('inf'), -cutoff, cutoff, float('inf')])
+    df['block_bins'] = pd.cut(
+        df['block_readout'],
+        bins=[-float('inf'), -cutoff, cutoff, float('inf')])
+
+    left_interval = pd.Interval(left=-np.inf, right=-cutoff, closed='right')
+    center_interval = pd.Interval(left=-cutoff, right=cutoff, closed='right')
+    right_interval = pd.Interval(left=cutoff, right=np.inf)
+
+    df['cluster'] = 'Remainder'
+    df['cluster'][(df['trial_bins'] == left_interval) &
+                  (df['block_bins'] == center_interval)] = 'Stim: -, Block: 0'
+    df['cluster'][(df['trial_bins'] == right_interval) &
+                  (df['block_bins'] == center_interval)] = 'Stim: +, Block: 0'
+    df['cluster'][(df['trial_bins'] == center_interval) &
+                  (df['block_bins'] == left_interval)] = 'Stim: 0, Block: -'
+    df['cluster'][(df['trial_bins'] == center_interval) &
+                  (df['block_bins'] == right_interval)] = 'Stim: 0, Block: +'
+    df.sort_values(by=['cluster', 'trial_readout', 'block_readout'], inplace=True)
+
+    cluster_weight_averages = pd.DataFrame(
+        np.nan,
+        columns=df['cluster'].unique(),
+        index=df['cluster'].unique())
+    recurrent_matrix = hook_input['model'].core.weight_hh_l0.detach().numpy()
+    for to_cluster_str, to_df in df.groupby(['cluster']):
+        to_neuron_indices = to_df.index.values
+        for from_cluster_str, from_df in df.groupby(['cluster']):
+            from_neuron_indices = from_df.index.values
+            cluster_weight_averages.loc[to_cluster_str, from_cluster_str] = np.mean(
+                recurrent_matrix[to_neuron_indices][:, from_neuron_indices])
+
+    ordering = np.array([
+        'Stim: 0, Block: +',
+        'Stim: 0, Block: -',
+        'Stim: +, Block: 0',
+        'Stim: -, Block: 0',
+        'Remainder',
+    ])
+
+    fig, ax = plt.subplots()
+    ax.set_title(f'Cutoff: {cutoff}')
+    sns.heatmap(cluster_weight_averages.loc[ordering, ordering],
+                cmap='RdBu_r',
+                center=0,
+                # vmin=-1.,
+                # vmax=1.,
+                square=True,
+                ax=ax,
+                cbar_kws={'label': 'Avg Weight', 'shrink': 0.5})
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag='model_recurrent_weight_avg_by_cluster',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
+    #
+    #
+    # indices = df.index.values
+    # group_indices = df.groupby(['cluster']).size().cumsum().values
+    #
+    # ax = sns.heatmap(recurrent_matrix[indices][:, indices],
+    #             cmap='RdBu_r',
+    #             center=0,
+    #             # vmin=-1.,
+    #             # vmax=1.,
+    #             square=True,
+    #             xticklabels=indices,  # indices
+    #             yticklabels=indices,  # indices
+    #             cbar_kws={'label': 'PC Distance', 'shrink': 0.5})
+    # ax.hlines(group_indices, *ax.get_xlim())
+    # ax.vlines(group_indices, *ax.get_ylim())
+    # plt.show()
+    #
+    #
+    # # df['trial_readout_pos'] = df['trial_readout'] > 0
+    # # df['block_readout_pos'] = df['block_readout'] > 0
+    #
+    # rows = []
+    # for i in range(recurrent_matrix.shape[1]):
+    #     for j in range(recurrent_matrix.shape[1]):
+    #         row = [
+    #             hidden_states_pca_results['trial_readout_vector'][0][i],
+    #             model_block_readout_vectors_results['block_readout_vector'][0][i],
+    #             recurrent_matrix[i, j],
+    #             hidden_states_pca_results['trial_readout_vector'][0][j],
+    #             model_block_readout_vectors_results['block_readout_vector'][0][j],
+    #             0.]
+    #         rows.append(row)
+    # df = pd.DataFrame(
+    #     rows,
+    #     columns=['to_trial_coef', 'to_block_coef', 'to_z', 'from_trial_coef', 'from_block_coef', 'from_z'])
+    #
+    # from sklearn.preprocessing import PolynomialFeatures
+    # poly_features = PolynomialFeatures(interaction_only=True, include_bias=False)
+    # X = df[['to_trial_coef', 'to_block_coef', 'from_trial_coef', 'from_block_coef']]
+    # X_with_interactions = poly_features.fit_transform(X)
+    # feature_names = poly_features.get_feature_names(['to_trial_coef', 'to_block_coef', 'from_trial_coef', 'from_block_coef'])
+    # y = df['to_z']
+    #
+    #
+    # from sklearn.linear_model import LassoCV, LinearRegression
+    # reg = LassoCV(alphas=np.logspace(-10, -1, 10), fit_intercept=False, normalize=True, cv=10)
+    # reg.fit(X_with_interactions, y)
+    # reg.score(X_with_interactions, y)
+    #
+    #
+    # from mpl_toolkits.mplot3d import Axes3D
+    # fig = plt.figure()
+    # ax = fig.gca(projection='3d')
+    # ax.quiver(df_subset['from_trial_coef'],
+    #           df_subset['from_block_coef'],
+    #           df_subset['from_z'],
+    #           df_subset['to_trial_coef'] - df_subset['from_trial_coef'],
+    #           df_subset['to_block_coef'] - df_subset['from_block_coef'],
+    #           df_subset['to_z'])
+    # plt.show()
+    #
+    #
+    # fig, ax = plt.subplots(figsize=(5, 5))
+    # for (from_trial_pos, from_block_pos), from_df in df.groupby(['trial_readout_pos', 'block_readout_pos']):
+    #     from_idx = from_df.index.values
+    #     for (to_trial_pos, to_block_pos), to_df in df.groupby(['trial_readout_pos', 'block_readout_pos']):
+    #         to_idx = to_df.index.values
+    #         recurrent_weights = recurrent_matrix[to_idx][:, from_idx]
+
+    # import scipy.cluster.hierarchy as spc
+    # pdist = spc.distance.pdist(readout_vectors)
+    # linkage = spc.linkage(pdist, method='complete')
+    # labels = spc.fcluster(linkage, 0.5 * np.max(pdist), 'distance')
+    # indices = np.argsort(labels)
+    #
+    #
+
+    #
+    #
+    # recurrent_matrix[indices][:, indices]
+    #
+    # u, s, vh = np.linalg.svd(recurrent_matrix, full_matrices=True)
+    # plt.hist(s)
+    # plt.show()
+    # pca_vh = hidden_states_pca_results['pca'].transform(u)
+    # plt.scatter(pca_vh[:, 0],
+    #             pca_vh[:, 1])
+    # plt.show()
+
+
 def hook_plot_model_effective_circuit(hook_input):
     # hidden states shape: (num rnn steps, num layers, hidden dimension)
     hidden_states = hook_input['hidden_states']
@@ -2703,7 +2921,6 @@ def hook_plot_radd_state_space_trajectories_within_trial(hook_input):
 
 
 def hook_plot_radd_state_space_vector_fields_ideal(hook_input):
-
     # TODO: deduplicate with hook_plot_state_space_vector_fields_ideal
     num_cols = 3
     fig, axes = plt.subplots(
@@ -3397,6 +3614,95 @@ def hook_plot_state_space_trajectories_within_block(hook_input):
 #         global_step=hook_input['grad_step'],
 #         close=True if hook_input['tag_prefix'] != 'analyze/' else False)
 
+def hook_plot_state_space_trajectories_different_block_same_stimuli(hook_input):
+    session_data = hook_input['session_data']
+
+    # sorted
+    dist_of_magn_along_block_vector = session_data.groupby(['trial_within_session'])[
+        'magn_along_block_vector'].nth(n=1).sort_values()
+
+    # keep top 29 left-most blocks and 15 right-most blocks
+    top_k = 20
+    leftmost_trial_indices = dist_of_magn_along_block_vector.index[:top_k]
+    leftmost_block_session_data = session_data.groupby(['trial_within_session']).filter(
+        lambda group: (group['trial_within_session'].isin(leftmost_trial_indices)).any()
+    )
+
+    rightmost_trial_indices = dist_of_magn_along_block_vector.index[-top_k:]
+    rightmost_block_session_data = session_data.groupby(['trial_within_session']).filter(
+        lambda group: (group['trial_within_session'].isin(rightmost_trial_indices)).any()
+    )
+
+    rnn_steps_before_obs = hook_input['envs'][0].rnn_steps_before_obs
+    l2_stimulus_distances = {}
+
+    # find two trials with as similar stimuli as possible
+    for right_idx, rightmost_block_trial_data in rightmost_block_session_data.groupby(['trial_within_session']):
+        right_block_left_stimuli = rightmost_block_trial_data['left_stimulus']
+        right_block_right_stimuli = rightmost_block_trial_data['right_stimulus']
+        right_block_diff_stimuli = right_block_right_stimuli - right_block_left_stimuli
+        for left_idx, leftmost_block_trial_data in leftmost_block_session_data.groupby(['trial_within_session']):
+            left_block_left_stimuli = leftmost_block_trial_data['left_stimulus']
+            left_block_right_stimuli = leftmost_block_trial_data['right_stimulus']
+            left_block_diff_stimuli = left_block_right_stimuli - left_block_left_stimuli
+            shortest_length = min(right_block_diff_stimuli.size, left_block_diff_stimuli.size)
+            l2_stimulus_distances[(right_idx, left_idx)] = np.linalg.norm(np.subtract(
+                right_block_diff_stimuli[rnn_steps_before_obs:shortest_length].values,
+                left_block_diff_stimuli[rnn_steps_before_obs:shortest_length].values))
+            # print(left_block_diff_stimuli)
+            # print(right_block_diff_stimuli)
+            # print(l2_stimulus_distances[(right_idx, left_idx)])
+
+    top_right_index, top_left_index = min(l2_stimulus_distances, key=l2_stimulus_distances.get)
+    right_trial_data = rightmost_block_session_data.groupby('trial_within_session').filter(
+        lambda group: (group['trial_within_session'] == top_right_index).all())
+    right_trial_data = right_trial_data.iloc[1:]
+    left_trial_data = leftmost_block_session_data.groupby('trial_within_session').filter(
+        lambda group: (group['trial_within_session'] == top_left_index).all())
+    left_trial_data = left_trial_data.iloc[1:]
+
+    # separate by side bias
+    fig, ax = plt.subplots(nrows=1,
+                           ncols=1,
+                           figsize=(4, 3))
+
+    ax.set_xlim(hook_input['pca_xrange'][0], hook_input['pca_xrange'][1])
+    ax.set_ylim(hook_input['pca_yrange'][0], hook_input['pca_yrange'][1])
+    ax.set_xlabel('PC #1')
+    ax.set_ylabel('PC #2')
+
+    pca_hidden_states = hook_input['pca_hidden_states']
+
+    for side, trial_data in [('left', left_trial_data), ('right', right_trial_data)]:
+
+        pca_trial_hidden_states = pca_hidden_states[trial_data.index.values]
+
+        # plot the first dt in the trial
+        ax.plot(
+            pca_trial_hidden_states[0, 0],
+            pca_trial_hidden_states[0, 1],
+            'o-',
+            markersize=2,
+            color=side_color_map[side],
+            zorder=2)
+
+        # plot the rest of the trial's dts
+        for i in range(1, len(trial_data)):
+            ax.plot(
+                pca_trial_hidden_states[i - 1:i + 1, 0],
+                pca_trial_hidden_states[i - 1:i + 1, 1],
+                'o-',
+                markersize=2,
+                color=side_color_map[side])
+
+    add_pca_readout_vectors_to_axis(ax=ax, hook_input=hook_input, add_labels=True)
+
+    hook_input['tensorboard_writer'].add_figure(
+        tag='state_space_trajectories_different_block_same_stimuli',
+        figure=fig,
+        global_step=hook_input['grad_step'],
+        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
+
 
 def hook_plot_state_space_trajectories_within_trial(hook_input):
     session_data = hook_input['session_data']
@@ -3536,7 +3842,6 @@ def hook_plot_state_space_trials_by_classifier(hook_input):
 
 
 def hook_plot_state_space_vector_fields_ideal(hook_input):
-
     num_cols = 3
     fig, axes = plt.subplots(
         nrows=2,
@@ -3554,10 +3859,22 @@ def hook_plot_state_space_vector_fields_ideal(hook_input):
 
         ax = axes[row, col]
         ax.axis('equal')  # set yscale to match xscale
-        title = r'$o_{{n,t}}^L={}, o_{{n,t}}^R={}, r_{{n, t}}={}$'.format(
-            np.round(lstim, 2),
-            np.round(rstim, 2),
-            np.round(fdbk, 2))
+        if np.isclose(lstim, 1.2, atol=1e-02) and np.isclose(rstim, 0.2, atol=1e-02):
+            title = 'Left Stimulus'
+        elif np.isclose(lstim, 0.2, atol=1e-02) and np.isclose(rstim, 1.2, atol=1e-02):
+            title = 'Right Stimulus'
+        elif np.isclose(lstim, 0.2, atol=1e-02) and np.isclose(rstim, 0.2, atol=1e-02):
+            title = 'Equal Stimulus'
+        elif fdbk == -1.:
+            title = 'Negative Feedback'
+        elif fdbk == 1.:
+            title = 'Positive Feedback'
+        elif lstim == 0 and rstim == 0 and fdbk == 0:
+            title = 'No Stimulus'
+        else:
+            # print(lstim, rstim, fdbk)
+            raise ValueError
+
         ax.set_title(title, fontsize=8)
         if row == 1:
             ax.set_xlabel('PC #1')
@@ -4080,7 +4397,6 @@ def hook_plot_two_unit_task_trained_state_space_vector_fields_ideal(hook_input):
         figsize=(8, 3),
         gridspec_kw={"width_ratios": [1, 1, 1, 0.05]})
 
-
     color_min = 0.
     color_max = np.max(hook_input['two_unit_task_trained_fixed_point_df']['displacement_norm'])
 
@@ -4149,229 +4465,6 @@ def hook_plot_two_unit_task_trained_state_space_vector_fields_ideal(hook_input):
     color_bar.draw_all()
     hook_input['tensorboard_writer'].add_figure(
         tag='two_unit_task_trained_state_space_vector_fields_ideal',
-        figure=fig,
-        global_step=hook_input['grad_step'],
-        close=True if hook_input['tag_prefix'] != 'analyze/' else False)
-
-
-def hook_plot_ilas_requests(hook_input):
-    # import matplotlib.pyplot as plt
-    # plt.scatter(hidden_states_pca_results['trial_readout_vector'][0],
-    #             model_block_readout_vectors_results['block_readout_vector'][0])
-    # plt.show()
-    #
-    #
-    # readout_vectors = np.stack([hidden_states_pca_results['trial_readout_vector'][0],
-    #                             model_block_readout_vectors_results['block_readout_vector'][0]],
-    #                            axis=1)
-    # recurrent_matrix = hook_input['model'].core.weight_hh_l0.detach().numpy()
-    #
-    # df = pd.DataFrame(dict(
-    #     trial_readout=hidden_states_pca_results['trial_readout_vector'][0],
-    #     block_readout=model_block_readout_vectors_results['block_readout_vector'][0]))
-    # df['trial_bins'] = pd.cut(df['trial_readout'], bins=[-float('inf'), -0.17, 0.17, float('inf')], labels=False)
-    # df['block_bins'] = pd.cut(df['block_readout'], bins=[-float('inf'), -0.17, 0.17, float('inf')], labels=False)
-    # df['cluster'] = 5
-    # df['cluster'][(df['trial_bins'] == 1) & (df['block_bins'] == 0)] = 1
-    # df['cluster'][(df['trial_bins'] == 0) & (df['block_bins'] == 1)] = 2
-    # df['cluster'][(df['trial_bins'] == 1) & (df['block_bins'] == 2)] = 3
-    # df['cluster'][(df['trial_bins'] == 2) & (df['block_bins'] == 1)] = 4
-    # df.sort_values(by=['cluster', 'trial_readout', 'block_readout'], inplace=True)
-    #
-    # cluster_averages = np.zeros((5, 5))
-    # for to_cluster, to_df in df.groupby(['cluster']):
-    #     to_idx = to_df.index.values
-    #     for from_cluster, from_df in df.groupby(['cluster']):
-    #         from_idx = from_df.index.values
-    #         cluster_averages[to_cluster-1, from_cluster-1] = np.mean(recurrent_matrix[to_idx][:, from_idx])
-    #
-    # cluster_names = np.array([
-    #     'Stim: 0, Block: -',
-    #     'Stim: -, Block: 0',
-    #     'Stim: 0, Block: +',
-    #     'Stim: +, Block: 0',
-    #     'Remainder',
-    # ])
-    # cluster_permutation = np.array([2, 0, 3, 1, 4])
-    # import seaborn as sns
-    # sns.heatmap(cluster_averages[cluster_permutation][:, cluster_permutation],
-    #             cmap='RdBu_r',
-    #             center=0,
-    #             # vmin=-1.,
-    #             # vmax=1.,
-    #             square=True,
-    #             xticklabels=cluster_names[cluster_permutation],  # indices
-    #             yticklabels=cluster_names[cluster_permutation],  # indices
-    #             cbar_kws={'label': 'Avg Weight', 'shrink': 0.5})
-    # plt.show()
-    #
-    #
-    # indices = df.index.values
-    # group_indices = df.groupby(['cluster']).size().cumsum().values
-    #
-    # ax = sns.heatmap(recurrent_matrix[indices][:, indices],
-    #             cmap='RdBu_r',
-    #             center=0,
-    #             # vmin=-1.,
-    #             # vmax=1.,
-    #             square=True,
-    #             xticklabels=indices,  # indices
-    #             yticklabels=indices,  # indices
-    #             cbar_kws={'label': 'PC Distance', 'shrink': 0.5})
-    # ax.hlines(group_indices, *ax.get_xlim())
-    # ax.vlines(group_indices, *ax.get_ylim())
-    # plt.show()
-    #
-    #
-    # # df['trial_readout_pos'] = df['trial_readout'] > 0
-    # # df['block_readout_pos'] = df['block_readout'] > 0
-    #
-    # rows = []
-    # for i in range(recurrent_matrix.shape[1]):
-    #     for j in range(recurrent_matrix.shape[1]):
-    #         row = [
-    #             hidden_states_pca_results['trial_readout_vector'][0][i],
-    #             model_block_readout_vectors_results['block_readout_vector'][0][i],
-    #             recurrent_matrix[i, j],
-    #             hidden_states_pca_results['trial_readout_vector'][0][j],
-    #             model_block_readout_vectors_results['block_readout_vector'][0][j],
-    #             0.]
-    #         rows.append(row)
-    # df = pd.DataFrame(
-    #     rows,
-    #     columns=['to_trial_coef', 'to_block_coef', 'to_z', 'from_trial_coef', 'from_block_coef', 'from_z'])
-    #
-    # from sklearn.preprocessing import PolynomialFeatures
-    # poly_features = PolynomialFeatures(interaction_only=True, include_bias=False)
-    # X = df[['to_trial_coef', 'to_block_coef', 'from_trial_coef', 'from_block_coef']]
-    # X_with_interactions = poly_features.fit_transform(X)
-    # feature_names = poly_features.get_feature_names(['to_trial_coef', 'to_block_coef', 'from_trial_coef', 'from_block_coef'])
-    # y = df['to_z']
-    #
-    #
-    # from sklearn.linear_model import LassoCV, LinearRegression
-    # reg = LassoCV(alphas=np.logspace(-10, -1, 10), fit_intercept=False, normalize=True, cv=10)
-    # reg.fit(X_with_interactions, y)
-    # reg.score(X_with_interactions, y)
-    #
-    #
-    # from mpl_toolkits.mplot3d import Axes3D
-    # fig = plt.figure()
-    # ax = fig.gca(projection='3d')
-    # ax.quiver(df_subset['from_trial_coef'],
-    #           df_subset['from_block_coef'],
-    #           df_subset['from_z'],
-    #           df_subset['to_trial_coef'] - df_subset['from_trial_coef'],
-    #           df_subset['to_block_coef'] - df_subset['from_block_coef'],
-    #           df_subset['to_z'])
-    # plt.show()
-    #
-    #
-    # fig, ax = plt.subplots(figsize=(5, 5))
-    # for (from_trial_pos, from_block_pos), from_df in df.groupby(['trial_readout_pos', 'block_readout_pos']):
-    #     from_idx = from_df.index.values
-    #     for (to_trial_pos, to_block_pos), to_df in df.groupby(['trial_readout_pos', 'block_readout_pos']):
-    #         to_idx = to_df.index.values
-    #         recurrent_weights = recurrent_matrix[to_idx][:, from_idx]
-
-    # import scipy.cluster.hierarchy as spc
-    # pdist = spc.distance.pdist(readout_vectors)
-    # linkage = spc.linkage(pdist, method='complete')
-    # labels = spc.fcluster(linkage, 0.5 * np.max(pdist), 'distance')
-    # indices = np.argsort(labels)
-    #
-    #
-
-    #
-    #
-    # recurrent_matrix[indices][:, indices]
-    #
-    # u, s, vh = np.linalg.svd(recurrent_matrix, full_matrices=True)
-    # plt.hist(s)
-    # plt.show()
-    # pca_vh = hidden_states_pca_results['pca'].transform(u)
-    # plt.scatter(pca_vh[:, 0],
-    #             pca_vh[:, 1])
-    # plt.show()
-
-    raise NotImplementedError
-
-    num_cols = 3
-    fig, axes = plt.subplots(
-        nrows=1,
-        ncols=num_cols + 1,  # +1 for colorbar
-        figsize=(8, 3),
-        gridspec_kw={"width_ratios": [1, 1, 1, 0.05]})
-
-    color_min = 0.
-    color_max = np.max(hook_input['fixed_point_df']['displacement_norm'])
-
-    # drop all except left stimulus, no stimulus, right stimulus
-    fixed_point_df = hook_input['fixed_point_df']
-    indices_to_keep = ((fixed_point_df['left_stimulus'] == 1.2) & (fixed_point_df['feedback'] == -0.05))\
-                      | ((fixed_point_df['right_stimulus'] != 1.2) & (fixed_point_df['feedback'] == -0.05))\
-                      | (fixed_point_df['feedback'] == 0.)
-    fixed_point_df = fixed_point_df[indices_to_keep]
-    initial_pca_sampled_states = np.stack(
-        hook_input['fixed_point_df']['initial_pca_sampled_state'].values.tolist())
-    initial_pca_sampled_states = initial_pca_sampled_states[indices_to_keep]
-
-    # calculate ranges of plot
-    xmin = np.min(initial_pca_sampled_states[:, 0]) - 0.1
-    xmax = np.max(initial_pca_sampled_states[:, 0]) + 0.1
-    ymin = np.min(initial_pca_sampled_states[:, 1]) - 0.1
-    ymax = np.max(initial_pca_sampled_states[:, 1]) + 0.1
-
-    for i, ((lstim, rstim, fdbk), fixed_point_subset) in enumerate(
-            fixed_point_df.groupby([
-                'left_stimulus', 'right_stimulus', 'feedback'], sort=False)):
-
-        col = int(i % num_cols)
-        ax = axes[col]
-        ax.axis('equal')  # set yscale to match xscale
-        if i == 0:
-            title = 'Left Stimulus'
-        elif i == 1:
-            title = 'No Stimulus'
-        elif i == 2:
-            title = 'Right Stimulus'
-        else:
-            raise ValueError
-        ax.set_title(title, fontsize=8)
-        ax.set_xlabel('Unit #1')
-
-        if col == 0:
-            ax.set_ylabel('Unit #2')
-        else:
-            ax.set_yticklabels([])
-
-        ax.set_xlim(xmin, xmax)
-        ax.set_ylim(ymin, ymax)
-        initial_pca_sampled_states = np.stack(
-            fixed_point_subset['initial_pca_sampled_state'].values.tolist())
-        displacement_pca = np.stack(fixed_point_subset['displacement_pca'].values.tolist())
-
-        qvr = ax.quiver(
-            initial_pca_sampled_states[:, 0],
-            initial_pca_sampled_states[:, 1],
-            displacement_pca[:, 0],  # / np.linalg.norm(displacement_pca, axis=1),
-            displacement_pca[:, 1],  # / np.linalg.norm(displacement_pca, axis=1),
-            fixed_point_subset['displacement_norm'],  # color
-            angles='xy',  # this and the next two ensures vector scales match data scales
-            scale_units='xy',
-            scale=1,
-            alpha=0.6,
-            clim=(color_min, color_max),
-            headwidth=7,
-            cmap='gnuplot2')
-
-    # merge the rightmost column for the colorbar
-    color_bar = fig.colorbar(qvr, cax=axes[-1])
-    color_bar.set_label(r'state velocity (a.u.)', size=9)
-    color_bar.set_alpha(1)
-    color_bar.draw_all()
-    hook_input['tensorboard_writer'].add_figure(
-        tag='ila_request',
         figure=fig,
         global_step=hook_input['grad_step'],
         close=True if hook_input['tag_prefix'] != 'analyze/' else False)

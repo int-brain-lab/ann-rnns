@@ -2173,8 +2173,8 @@ def sample_model_states_in_state_space(projection_obj,
     # sample possible activity uniformly over the plane, then exclude points
     # outside the convex hull
     pc1_values, pc2_values = np.meshgrid(
-        np.linspace(xrange[0], xrange[1], num=50),
-        np.linspace(yrange[0], yrange[1], num=50))
+        np.linspace(xrange[0], xrange[1], num=15),
+        np.linspace(yrange[0], yrange[1], num=15))
     pca_hidden_states = np.stack((pc1_values.flatten(), pc2_values.flatten())).T
     in_hull_indices = test_points_in_hull(p=pca_hidden_states, hull=convex_hull)
     pca_hidden_states = pca_hidden_states[in_hull_indices]
