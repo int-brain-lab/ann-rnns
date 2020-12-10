@@ -1,7 +1,7 @@
-# Fiete Lab - IBL ANN-RNNs Project
+# Reverse-engineering RNN solutions to a hierarchical inference task for mice
 
-Code corresponding to the paper [Reverse-engineering
-Recurrent Neural Network solutions to a hierarchical inference task for mice](https://www.biorxiv.org/content/10.1101/2020.06.09.142745v2).
+Code corresponding to the NeurIPS 2020 paper [Reverse-engineering
+Recurrent Neural Network solutions to a hierarchical inference task for mice](https://proceedings.neurips.cc/paper/2020/hash/30f0641c041f03d94e95a76b9d8bd58f-Abstract.html).
 
 ![](documents/hook_plot_radd_state_space_vector_fields_ideal.jpg)
 
